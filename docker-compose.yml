@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  nanoquant:
+    build: .
+    container_name: nanoquant-ai
+    volumes:
+      - ./nanoquant_v1.db:/app/nanoquant_v1.db
+      - ./trade_history.json:/app/trade_history.json
+      - ./nanoquant.log:/app/nanoquant.log
+      - ./.env:/app/.env
+    environment:
+      - PYTHONUNBUFFERED=1
+    stdin_open: true
+    tty: true
+    # Uncomment to run main.py automatically
+    # command: python main.py
