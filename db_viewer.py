@@ -13,8 +13,9 @@ from flask import Flask, render_template_string, request
 from database import TradingDatabase
 
 app = Flask(__name__)
-DB_PATH = os.environ.get('NANOQUANT_DB', 'nanoquant_v1.db')
-TRADE_HISTORY_PATH = os.environ.get('TRADE_HISTORY_PATH', 'trade_history.json')
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.environ.get('NANOQUANT_DB', os.path.join(_BASE_DIR, 'nanoquant_v1.db'))
+TRADE_HISTORY_PATH = os.environ.get('TRADE_HISTORY_PATH', os.path.join(_BASE_DIR, 'trade_history.json'))
 db = TradingDatabase(DB_PATH)
 
 REFRESH_SECONDS = 10
@@ -136,9 +137,9 @@ HTML_TEMPLATE = """
         <tr>
           <td>{{ d.timestamp[:19] if d.timestamp else '-' }}</td>
           <td>{{ d.ticker }}</td>
-          <td class="action-{{ d.action }}">{% if d.action == 'BUY' %}매수{% elif d.action == 'SELL' %}매도{% else %}보유{% endif %}</td>
+          <td class="action-{{ d.action }}">{% if d.action == 'BUY' %}매수{% elif d.action == 'SELL' %}매도{% else %}대기{% endif %}</td>
           <td>{{ "%.2f"|format(d.price) if d.price is not none else '-' }}</td>
-          <td>{{ "%.2f"|format(d.amount) if d.amount is not none else '-' }}</td>
+          <td>{{ d.get('_amount_display', '-') }}</td>
           <td>{{ "%.0f"|format(d.confidence) if d.confidence is not none else '-' }}%</td>
           <td>{{ d.risk_level or '-' }}</td>
           <td>{{ d.trigger_score or '-' }}</td>
@@ -210,7 +211,7 @@ HTML_TEMPLATE = """
         <tr>
           <td>{{ r.eval_timestamp[:19] if r.eval_timestamp else '-' }}</td>
           <td>{{ r.ticker }}</td>
-          <td class="action-{{ r.action }}">{% if r.action == 'BUY' %}매수{% elif r.action == 'SELL' %}매도{% else %}보유{% endif %}</td>
+          <td class="action-{{ r.action }}">{% if r.action == 'BUY' %}매수{% elif r.action == 'SELL' %}매도{% else %}대기{% endif %}</td>
           <td>{{ "%.2f"|format(r.decision_price) if r.decision_price is not none else '-' }}</td>
           <td>{{ "%.2f"|format(r.target_price) if r.target_price is not none else '-' }}</td>
           <td class="{{ 'success' if (r.profit_loss or 0) >= 0 else 'fail' }}">{{ "%.2f"|format(r.profit_loss) if r.profit_loss is not none else '-' }}%</td>
@@ -258,7 +259,34 @@ HTML_TEMPLATE = """
         {% endfor %}
       </tbody>
     </table>
-    <p class="meta" style="margin-top: 8px;">초기자본: ${{ "%.2f"|format(portfolio.initial_cash) }} | 거래기록: {{ trade_history_path }}</p>
+    <h3 style="font-size: 0.95rem; margin: 20px 0 8px 0; color: #a5b4fc;">거래 내역 (실제 매수/매도)</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>시간</th>
+          <th>종목</th>
+          <th>행동</th>
+          <th>수량</th>
+          <th>가격</th>
+          <th>금액</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in portfolio.trade_history %}
+        <tr>
+          <td>{{ t.timestamp[:19] if t.timestamp else '-' }}</td>
+          <td>{{ t.ticker }}</td>
+          <td class="action-{{ t.action }}">{% if t.action == 'BUY' %}매수{% else %}매도{% endif %}</td>
+          <td>{{ "%.4f"|format(t.shares) if t.shares is not none else '-' }}</td>
+          <td>${{ "%.2f"|format(t.price) if t.price is not none else '-' }}</td>
+          <td>${{ "%.2f"|format(t.amount) if t.amount is not none else '-' }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6">거래 내역 없음</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p class="meta" style="margin-top: 8px;">초기자본: ${{ "%.2f"|format(portfolio.initial_cash) }} | 파일: {{ trade_history_path }}</p>
     {% else %}
     <p class="meta">trade_history.json이 없거나 비어 있습니다. main.py 실행 후 거래가 발생하면 표시됩니다.</p>
     {% endif %}
@@ -276,6 +304,9 @@ def _parse_decision_meta(decisions):
             d['meta'] = json.loads(d['metadata']) if d.get('metadata') else {}
         except (json.JSONDecodeError, TypeError):
             d['meta'] = {}
+        # 금액 표시: BUY=$5.00, SELL=50%, 대기(HOLD)=-
+        act, amt = d.get('action', ''), d.get('amount')
+        d['_amount_display'] = f'${float(amt):.2f}' if act == 'BUY' and amt is not None else (f'{float(amt):.0f}%' if act == 'SELL' and amt is not None else '-')
         qi = d.get('meta', {}).get('quant_indicators') or {}
         # Multi-timeframe: { '15m': {...}, '1h': {...}, '1d': {...} }
         if isinstance(qi.get('15m'), dict) or isinstance(qi.get('1h'), dict) or isinstance(qi.get('1d'), dict):
@@ -409,6 +440,9 @@ def _load_portfolio(initial_cash: float = 75.0):
     pnl = total_value - initial_cash
     pnl_pct = (pnl / initial_cash * 100) if initial_cash else 0
 
+    # 거래 내역: 최신순 (역순)
+    trade_log = list(reversed(history)) if history else []
+
     return {
         'cash': cash,
         'total_value': total_value,
@@ -416,6 +450,7 @@ def _load_portfolio(initial_cash: float = 75.0):
         'pnl_pct': pnl_pct,
         'initial_cash': initial_cash,
         'positions': pos_list,
+        'trade_history': trade_log,
     }
 
 

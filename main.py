@@ -238,7 +238,8 @@ class NanoQuantAI:
                 self.reflection_engine = ReflectionEngine('nanoquant_v1.db', ai_model=ai_model)
                 if simulation_mode:
                     self.portfolio = Portfolio(initial_cash=trading_capital)
-                    if self.portfolio.load_from_history('trade_history.json'):
+                    _history_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'trade_history.json')
+                    if self.portfolio.load_from_history(_history_path):
                         logger.info(
                             "Portfolio restored from trade_history.json "
                             "(cash=%.2f, positions=%s)",
@@ -261,7 +262,7 @@ class NanoQuantAI:
         """
         Layer 1: Quant Scanner
 
-        Scans universe of US small-cap stocks and selects top 5 candidates
+        Scans universe of US small-cap stocks and selects top 10 candidates
         based on low PBR/PER and volume
 
         Returns:
@@ -270,7 +271,7 @@ class NanoQuantAI:
         logger.info("=" * 60)
         logger.info("LAYER 1: Scanning for small-cap candidates...")
 
-        candidates = self.data_fetcher.scan_small_caps(limit=5)
+        candidates = self.data_fetcher.scan_small_caps(limit=10)
 
         logger.info(f"[OK] Selected {len(candidates)} candidates: {', '.join(candidates)}")
         logger.info("=" * 60)
@@ -390,7 +391,7 @@ class NanoQuantAI:
         # Get learning summary from past reflections
         learning_summary = self.reflection_engine.get_learning_summary(limit=5)
 
-        # Run deep agent
+        # Run deep agent (current_price 전달: SELL 시 매수가 대비 손익률 판단용)
         decision = self.deep_agent.analyze(
             ticker=ticker,
             chart_data=stock_info.get('bars', []),
@@ -399,7 +400,8 @@ class NanoQuantAI:
             current_balance=current_balance,
             current_positions=position_dict,
             learning_summary=learning_summary,
-            quant_indicators=stock_info.get('quant_indicators', {})
+            quant_indicators=stock_info.get('quant_indicators', {}),
+            current_price=stock_info.get('current_price'),
         )
 
         logger.info(f"\n  Decision: {decision.action}")
@@ -451,11 +453,12 @@ class NanoQuantAI:
             current_price: Current stock price
         """
         if decision.action == 'HOLD':
-            logger.info(f"  No trade executed for {ticker} (HOLD)")
+            logger.info(f"  No trade executed for {ticker} (대기)")
             return
 
-        if decision.confidence < 70:
-            logger.warning(f"  Skipping trade for {ticker} (confidence too low: {decision.confidence}%)")
+        confidence_threshold = float(os.getenv('CONFIDENCE_THRESHOLD', 65))
+        if decision.confidence < confidence_threshold:
+            logger.warning(f"  Skipping trade for {ticker} (confidence {decision.confidence}% < {confidence_threshold}%)")
             return
 
         try:
@@ -542,8 +545,8 @@ class NanoQuantAI:
                 # Rate limiting (avoid API spam)
                 time.sleep(2)
 
-            # Save trade history
-            self.portfolio.save_history()
+            # Save trade history (프로젝트 루트 기준, db_viewer와 동일 경로)
+            self.portfolio.save_history(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'trade_history.json'))
 
             logger.info(f"\n[OK] Cycle completed at {datetime.now().strftime('%H:%M:%S')}")
 

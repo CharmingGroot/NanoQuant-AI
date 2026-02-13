@@ -84,7 +84,8 @@ class DeepAgent:
         current_balance: float,
         current_positions: Dict = None,
         learning_summary: str = None,
-        quant_indicators: Dict = None
+        quant_indicators: Dict = None,
+        current_price: float = None,
     ) -> str:
         """
         Build analysis prompt for LLM
@@ -97,6 +98,7 @@ class DeepAgent:
             current_balance: Available cash
             current_positions: Dict of current holdings
             learning_summary: Summary of past reflections
+            current_price: Current market price of ticker (for PnL context on SELL)
 
         Returns:
             Formatted prompt string
@@ -167,7 +169,13 @@ class DeepAgent:
         if current_positions:
             prompt += "- Current Positions:\n"
             for symbol, data in current_positions.items():
-                prompt += f"  * {symbol}: {data.get('qty', 0)} shares @ ${data.get('avg_price', 0):.2f}\n"
+                qty = data.get('qty', 0)
+                avg_price = data.get('avg_price', 0)
+                line = f"  * {symbol}: {qty} shares, 매수가(평균단가) ${avg_price:.2f}"
+                if symbol == ticker and current_price is not None and avg_price and avg_price > 0:
+                    pnl_pct = (current_price - avg_price) / avg_price * 100
+                    line += f", 현재가 ${current_price:.2f}, 평가손익 {pnl_pct:+.2f}%"
+                prompt += line + "\n"
         else:
             prompt += "- No current positions\n"
 
@@ -190,12 +198,13 @@ Analyze the above data and make ONE of these decisions:
 
 **Guidelines**:
 - This is small-cap trading with ~$75 total capital
-- Only trade if you have HIGH confidence (70+)
+- Only trade if confidence >= 65 (balanced aggression)
 - Consider: Is the news catalyst real? Is volume confirming? Is the price action sustainable?
-- Multi-timeframe: 1d = trend context (RSI/SMA on daily = most reliable), 1h = structure, 15m = entry timing
-- Use quant indicators: RSI<30 oversold, RSI>70 overbought; MACD histogram sign = trend; Bollinger %B = position
-- Avoid pump-and-dumps, illiquid stocks, and unclear patterns
-- Be conservative - preservation of capital is key
+- Multi-timeframe: 1d = trend context, 1h = structure, 15m = entry timing
+- Use quant indicators: RSI<30 oversold (반등 후보), RSI>70 overbought; MACD histogram sign = trend; Bollinger %B = position
+- **SELL 시**: 매수가 대비 현재가·평가손익을 고려하여 수익실현/손절 판단
+- When RSI oversold + news catalyst align, lean toward taking a small position rather than waiting for "perfect" confirmation
+- Avoid pump-and-dumps and illiquid stocks; but do not over-wait for perfect signals
 - **reasoning** 필드는 반드시 한국어로 작성할 것
 
 Respond with ONLY the JSON object, no other text.
@@ -211,7 +220,8 @@ Respond with ONLY the JSON object, no other text.
         current_balance: float,
         current_positions: Dict = None,
         learning_summary: str = None,
-        quant_indicators: Dict = None
+        quant_indicators: Dict = None,
+        current_price: float = None,
     ) -> TradingDecision:
         """
         Analyze stock and make trading decision
@@ -231,7 +241,8 @@ Respond with ONLY the JSON object, no other text.
         prompt = self._build_prompt(
             ticker, chart_data, news_items,
             trigger_reasons, current_balance, current_positions, learning_summary,
-            quant_indicators=quant_indicators
+            quant_indicators=quant_indicators,
+            current_price=current_price,
         )
 
         # Call LLM API
