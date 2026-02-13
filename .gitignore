@@ -1,0 +1,46 @@
+# === 민감값 (절대 커밋 금지) ===
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets.json
+credentials*
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+.env/
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# === 프로젝트 런타임 ===
+nanoquant*.db
+*.db
+nanoquant.log
+*.log
+trade_history.json
+
+# === IDE / OS ===
+.idea/
+.vscode/
+.cursor/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+nul
+
+# === 테스트 / 임시 ===
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg
