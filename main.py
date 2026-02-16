@@ -16,8 +16,8 @@ from scraper import StockScraper
 from trigger import EventTrigger
 from deep_agent import DeepAgent, TradingDecision
 from database import TradingDatabase
-from reflection import ReflectionEngine
 from quant_rules import compute_all_multi
+from missed_profit import run_decision_followup_cycle
 
 
 def _serialize_quant_multi(quant_multi: dict) -> dict:
@@ -187,7 +187,7 @@ class NanoQuantAI:
     Main orchestrator for the NanoQuant AI trading system
 
     Architecture:
-    - Layer 1: Quant Scanner (daily/hourly) - selects 20 small-cap candidates
+    - Layer 1: Quant Scanner (daily/hourly) - selects 50 small-cap candidates
     - Layer 2: Event-Driven Trigger (every 15 min) - scores candidates
     - Layer 3: Deep Agent (on trigger) - LLM analyzes and makes decisions
 
@@ -200,7 +200,8 @@ class NanoQuantAI:
         max_position_size: float = 5.0,
         ai_model: str = 'claude',
         simulation_mode: bool = True,
-        scan_only: bool = False
+        scan_only: bool = False,
+        use_news_for_trading: bool = True
     ):
         """
         Initialize NanoQuant AI
@@ -211,6 +212,7 @@ class NanoQuantAI:
             ai_model: 'claude' or 'gpt'
             simulation_mode: Run in simulation (no real trades)
             scan_only: If True, run only Layer 1+2 (no LLM, no trades, no DB)
+            use_news_for_trading: If True, fetch news and use in trigger/LLM; if False, exclude news
         """
         load_dotenv()
 
@@ -218,6 +220,7 @@ class NanoQuantAI:
         self.max_position_size = max_position_size
         self.simulation_mode = simulation_mode
         self.scan_only = scan_only
+        self.use_news_for_trading = use_news_for_trading
 
         # Initialize components
         logger.info("Initializing NanoQuant AI components...")
@@ -229,13 +232,11 @@ class NanoQuantAI:
             if scan_only:
                 self.deep_agent = None
                 self.db = None
-                self.reflection_engine = None
                 self.portfolio = None
                 logger.info("[OK] Scan-only mode: Layer 1+2 only (no LLM/DB)")
             else:
                 self.deep_agent = DeepAgent(model=ai_model, max_position_size=max_position_size)
                 self.db = TradingDatabase('nanoquant_v1.db')
-                self.reflection_engine = ReflectionEngine('nanoquant_v1.db', ai_model=ai_model)
                 if simulation_mode:
                     self.portfolio = Portfolio(initial_cash=trading_capital)
                     _history_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'trade_history.json')
@@ -262,7 +263,7 @@ class NanoQuantAI:
         """
         Layer 1: Quant Scanner
 
-        Scans universe of US small-cap stocks and selects top 10 candidates
+        Scans universe of US small-cap stocks and selects top 50 candidates
         based on low PBR/PER and volume
 
         Returns:
@@ -271,7 +272,7 @@ class NanoQuantAI:
         logger.info("=" * 60)
         logger.info("LAYER 1: Scanning for small-cap candidates...")
 
-        candidates = self.data_fetcher.scan_small_caps(limit=10)
+        candidates = self.data_fetcher.scan_small_caps(limit=50)
 
         logger.info(f"[OK] Selected {len(candidates)} candidates: {', '.join(candidates)}")
         logger.info("=" * 60)
@@ -298,11 +299,13 @@ class NanoQuantAI:
             self.candidate_pool = self.layer1_scan_candidates()
 
         triggered_stocks = []
-        scraper = StockScraper(headless=True)
-        scraper.start()
+        scraper = StockScraper(headless=True) if self.use_news_for_trading else None
+        if scraper:
+            scraper.start()
 
         try:
             stock_data = []
+            _empty_news = {'found': False, 'matches': []}
 
             for ticker in self.candidate_pool:
                 logger.info(f"  Analyzing {ticker}...")
@@ -314,13 +317,17 @@ class NanoQuantAI:
                     logger.warning(f"    [X] No data available for {ticker}")
                     continue
 
-                # Get news data (fetch once, reuse for keyword check)
-                news_items = scraper.get_stock_news(ticker, max_articles=10)
-                news_result = scraper.check_keywords_in_news(
-                    ticker,
-                    self.trigger_engine.IMPORTANT_KEYWORDS,
-                    news_items=news_items
-                )
+                # Get news data (skip when USE_NEWS_FOR_TRADING=0)
+                if self.use_news_for_trading and scraper:
+                    news_items = scraper.get_stock_news(ticker, max_articles=10)
+                    news_result = scraper.check_keywords_in_news(
+                        ticker,
+                        self.trigger_engine.IMPORTANT_KEYWORDS,
+                        news_items=news_items
+                    )
+                else:
+                    news_items = []
+                    news_result = _empty_news
 
                 bars_dict = snapshot.get('bars_dict', {
                     '15m': snapshot.get('bars_15m', snapshot.get('bars', [])),
@@ -359,7 +366,8 @@ class NanoQuantAI:
                     triggered_stocks.append((ticker, score, stock_info))
 
         finally:
-            scraper.close()
+            if scraper:
+                scraper.close()
 
         logger.info("=" * 60)
         return triggered_stocks
@@ -388,8 +396,8 @@ class NanoQuantAI:
             for t, p in self.portfolio.positions.items()
         }
 
-        # Get learning summary from past reflections
-        learning_summary = self.reflection_engine.get_learning_summary(limit=5)
+        # Get learning summary from past 사후 추적 (decision_followups)
+        learning_summary = self.db.get_learning_summary(limit=5)
 
         # Run deep agent (current_price 전달: SELL 시 매수가 대비 손익률 판단용)
         decision = self.deep_agent.analyze(
@@ -402,6 +410,7 @@ class NanoQuantAI:
             learning_summary=learning_summary,
             quant_indicators=stock_info.get('quant_indicators', {}),
             current_price=stock_info.get('current_price'),
+            use_news=self.use_news_for_trading,
         )
 
         logger.info(f"\n  Decision: {decision.action}")
@@ -487,27 +496,22 @@ class NanoQuantAI:
         except Exception as e:
             logger.error(f"  [X] Failed to execute trade for {ticker}: {str(e)}")
 
-    def run_reflection_cycle(self):
+    def run_decision_followup_cycle(self):
         """
-        Run daily reflection on past decisions
-
-        Evaluates decisions made 24+ hours ago and generates learnings
+        모든 판단(BUY/SELL/HOLD)의 사후 추적 (가격, 옳고그름, LLM 학습메모)
+        리플렉션 로직 통합
         """
         try:
             logger.info("\n\n" + "=" * 60)
-            logger.info(f"REFLECTION CYCLE: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            logger.info(f"DECISION FOLLOWUP CYCLE: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             logger.info("=" * 60)
 
-            # Run reflection on decisions from 24+ hours ago
-            reflections_created = self.reflection_engine.run_reflection_cycle(
-                min_hours_ago=24,
-                max_reflections=20
-            )
+            db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'nanoquant_v1.db')
+            n = run_decision_followup_cycle(db_path=db_path, min_hours_ago=24, max_followups=30)
 
-            logger.info(f"[OK] Reflection cycle completed: {reflections_created} reflections created\n")
-
+            logger.info(f"[OK] Decision followup cycle completed: {n} followups processed\n")
         except Exception as e:
-            logger.error(f"Error in reflection cycle: {str(e)}", exc_info=True)
+            logger.error(f"Error in decision followup cycle: {str(e)}", exc_info=True)
 
     def run_cycle(self):
         """
@@ -566,6 +570,7 @@ class NanoQuantAI:
         logger.info(f"Capital: ${self.trading_capital}")
         logger.info(f"Max Position: ${self.max_position_size}")
         logger.info(f"Mode: {'SIMULATION' if self.simulation_mode else 'LIVE TRADING'}")
+        logger.info(f"News for trading: {'ON' if self.use_news_for_trading else 'OFF'}")
         if self.scan_only:
             logger.info("Scan Only: Layer 1+2 only (no LLM, no trades)")
         logger.info("=" * 60)
@@ -583,8 +588,8 @@ class NanoQuantAI:
         schedule.every(4).hours.do(lambda: setattr(self, 'candidate_pool', self.layer1_scan_candidates()))
         schedule.every(15).minutes.do(self.run_cycle)
 
-        # Schedule daily reflection (runs at 07:00 KST, after US market close)
-        schedule.every().day.at("07:00").do(self.run_reflection_cycle)
+        # Schedule 판단 사후 추적 (가격 + LLM 학습메모, 07:00)
+        schedule.every().day.at("07:00").do(self.run_decision_followup_cycle)
 
         # Run first cycle immediately
         self.run_cycle()
@@ -592,7 +597,7 @@ class NanoQuantAI:
         # Main loop
         logger.info("\n[SCHEDULER] Running every 15 minutes...\n")
         logger.info("   - Trading cycle: Every 15 minutes")
-        logger.info("   - Reflection cycle: Daily at 07:00\n")
+        logger.info("   - Decision followup (판단 사후 추적 + 학습): Daily at 07:00\n")
 
         while True:
             schedule.run_pending()
@@ -607,6 +612,7 @@ def main():
     trading_capital = float(os.getenv('TRADING_CAPITAL', 75))
     max_position_size = float(os.getenv('MAX_POSITION_SIZE', 5))
     scan_only = os.getenv('SCAN_ONLY', '0').lower() in ('1', 'true', 'yes')
+    use_news_for_trading = os.getenv('USE_NEWS_FOR_TRADING', '1').lower() in ('1', 'true', 'yes')
 
     # Initialize and start
     bot = NanoQuantAI(
@@ -614,7 +620,8 @@ def main():
         max_position_size=max_position_size,
         ai_model='claude',  # or 'gpt'
         simulation_mode=True,  # Always use simulation mode for safety
-        scan_only=scan_only
+        scan_only=scan_only,
+        use_news_for_trading=use_news_for_trading
     )
 
     bot.start()
