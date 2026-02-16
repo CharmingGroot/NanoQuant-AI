@@ -106,7 +106,7 @@ HTML_TEMPLATE = """
 
   <nav class="tabs">
     <a href="?tab=decisions" class="{{ 'active' if active_tab == 'decisions' else '' }}">최근 결정</a>
-    <a href="?tab=reflections" class="{{ 'active' if active_tab == 'reflections' else '' }}">리플렉션</a>
+    <a href="?tab=missed_profit" class="{{ 'active' if active_tab == 'missed_profit' else '' }}">판단 사후 추적</a>
     <a href="?tab=portfolio" class="{{ 'active' if active_tab == 'portfolio' else '' }}">포트폴리오</a>
   </nav>
 
@@ -191,35 +191,57 @@ HTML_TEMPLATE = """
     </table>
   </section>
 
-  <section id="tab-reflections" class="tab-pane {{ 'active' if active_tab == 'reflections' else '' }}">
-    <h2>최근 리플렉션 (최신 {{ reflections|length }}건)</h2>
+  <section id="tab-missed_profit" class="tab-pane {{ 'active' if active_tab == 'missed_profit' else '' }}">
+    <h2>판단 사후 추적 (옳고 그름 + 학습 메모)</h2>
+    <p class="meta" style="margin-bottom: 12px;">모든 판단 후 24h 경과 시점. BUY: 상승=올바름. SELL: 하락=올바름. HOLD: 하락=올바름. LLM 학습 메모 포함.</p>
     <table>
       <thead>
         <tr>
-          <th>평가 시간</th>
-          <th>종목</th>
+          <th>결정 시각</th>
           <th>행동</th>
-          <th>결정 시 가격</th>
-          <th>목표가</th>
-          <th>손익 %</th>
-          <th>성공</th>
-          <th>메모</th>
+          <th>종목</th>
+          <th>결정가</th>
+          <th>후속가</th>
+          <th>변동 %</th>
+          <th>옳고 그름</th>
+          <th>사유</th>
+          <th>학습 메모</th>
+          <th>판단 맥락</th>
         </tr>
       </thead>
       <tbody>
-        {% for r in reflections %}
+        {% for h in hold_followups %}
         <tr>
-          <td>{{ r.eval_timestamp[:19] if r.eval_timestamp else '-' }}</td>
-          <td>{{ r.ticker }}</td>
-          <td class="action-{{ r.action }}">{% if r.action == 'BUY' %}매수{% elif r.action == 'SELL' %}매도{% else %}대기{% endif %}</td>
-          <td>{{ "%.2f"|format(r.decision_price) if r.decision_price is not none else '-' }}</td>
-          <td>{{ "%.2f"|format(r.target_price) if r.target_price is not none else '-' }}</td>
-          <td class="{{ 'success' if (r.profit_loss or 0) >= 0 else 'fail' }}">{{ "%.2f"|format(r.profit_loss) if r.profit_loss is not none else '-' }}%</td>
-          <td class="{{ 'success' if r.is_success else 'fail' }}">{{ '예' if r.is_success else '아니오' }}</td>
-          <td class="note" title="{{ r.reflection_note or '' }}">{{ (r.reflection_note or '-')[:70] }}{% if (r.reflection_note or '')|length > 70 %}...{% endif %}</td>
+          <td>{{ (h.timestamp or '')[:19] }}</td>
+          <td class="action-{{ h.action }}">{% if h.action == 'BUY' %}매수{% elif h.action == 'SELL' %}매도{% else %}대기{% endif %}</td>
+          <td>{{ h.ticker }}</td>
+          <td>${{ "%.2f"|format(h.decision_price) if h.decision_price is not none else '-' }}</td>
+          <td>${{ "%.2f"|format(h.followup_price) if h.followup_price is not none else '-' }}</td>
+          <td class="{{ 'success' if (h.pnl_pct or 0) > 0 else ('fail' if (h.pnl_pct or 0) < 0 else '') }}">{{ "%+.2f"|format(h.pnl_pct) if h.pnl_pct is not none else '-' }}%</td>
+          <td class="{{ 'success' if h._is_correct else 'fail' }}">{{ h._correctness_label or '-' }}</td>
+          <td class="reasoning" title="{{ h.reasoning or '' }}">{{ (h.reasoning or '-')[:60] }}{% if (h.reasoning or '')|length > 60 %}...{% endif %}</td>
+          <td class="note" title="{{ h.reflection_note or '' }}">{{ (h.reflection_note or '-')[:80] }}{% if (h.reflection_note or '')|length > 80 %}...{% endif %}</td>
+          <td>
+            {% if h.meta %}
+            <details>
+              <summary>트리거 {{ (h.meta.get('trigger_reasons') or [])|length }}개 · 뉴스 {{ h.meta.get('news_count', 0) }}건</summary>
+              <div class="source-data">
+                {% if h.meta.get('trigger_reasons') %}
+                <strong>트리거:</strong>
+                <ul>{% for r in h.meta.trigger_reasons %}<li>{{ r }}</li>{% endfor %}</ul>
+                {% endif %}
+                {% if h.meta.get('quant_indicators') %}
+                <strong>지표:</strong> (15m/1h/1d RSI, SMA 등 저장됨)
+                {% endif %}
+              </div>
+            </details>
+            {% else %}
+            -
+            {% endif %}
+          </td>
         </tr>
         {% else %}
-        <tr><td colspan="8">아직 리플렉션 내역이 없습니다.</td></tr>
+        <tr><td colspan="10">판단 사후 추적 내역 없음. 24h 경과 후 07:00에 자동 수집됩니다.</td></tr>
         {% endfor %}
       </tbody>
     </table>
@@ -454,16 +476,37 @@ def _load_portfolio(initial_cash: float = 75.0):
     }
 
 
+def _parse_hold_followup_meta(followups):
+    """Parse metadata JSON and compute 옳고 그름 for decision followups"""
+    for h in followups:
+        try:
+            h['meta'] = json.loads(h['metadata']) if h.get('metadata') else {}
+        except (json.JSONDecodeError, TypeError):
+            h['meta'] = {}
+        # 옳고 그름: DB is_success 사용, 없으면 pnl+action으로 계산
+        action = h.get('action', 'HOLD')
+        pnl = h.get('pnl_pct') or 0
+        if h.get('is_success') is not None:
+            h['_is_correct'] = bool(h['is_success'])
+        else:
+            if action == 'BUY':
+                h['_is_correct'] = pnl > 0
+            else:
+                h['_is_correct'] = pnl < 0
+        h['_correctness_label'] = '올바름' if h['_is_correct'] else '틀림'
+    return followups
+
+
 @app.route('/')
 def index():
     from datetime import datetime
     active_tab = request.args.get('tab', 'decisions')
-    if active_tab not in ('decisions', 'reflections', 'portfolio'):
+    if active_tab not in ('decisions', 'missed_profit', 'portfolio'):
         active_tab = 'decisions'
 
     decisions = db.get_decisions(limit=DECISIONS_LIMIT)
     decisions = _parse_decision_meta(decisions)
-    reflections = db.get_recent_reflections(limit=REFLECTIONS_LIMIT)
+    hold_followups = _parse_hold_followup_meta(db.get_decision_followups(limit=100))
 
     initial_cash = float(os.environ.get('TRADING_CAPITAL', 75))
     portfolio = _load_portfolio(initial_cash=initial_cash)
@@ -474,7 +517,7 @@ def index():
         refresh_seconds=REFRESH_SECONDS,
         last_load=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         decisions=decisions,
-        reflections=reflections,
+        hold_followups=hold_followups,
         portfolio=portfolio,
         active_tab=active_tab,
         trade_history_path=TRADE_HISTORY_PATH,

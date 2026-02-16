@@ -205,7 +205,37 @@ class DataFetcher:
             'BEYOND', 'BYND', 'PTON', 'W', 'CHWY',
 
             # Additional small-caps
-            'SPCE', 'ASTR', 'RDW', 'IONQ', 'QUBT'
+            'SPCE', 'ASTR', 'RDW', 'IONQ', 'QUBT',
+
+            # Meme / Retail
+            'GME', 'AMC',
+
+            # AI / Semiconductor
+            'SMCI', 'SOUN', 'BBAI',
+
+            # Crypto / Bitcoin
+            'MSTR',
+
+            # EV China
+            'XPEV', 'LI',
+
+            # Space
+            'RKLB', 'ASTS', 'LUNR',
+
+            # Flying car / Mobility
+            'JOBY',
+
+            # Crypto mining (additional)
+            'CORZ', 'BITF',
+
+            # Fintech
+            'AFRM',
+
+            # Quantum computing
+            'RGTI',
+
+            # Other hot small-caps
+            'MULN', 'FSR', 'VFS'
         ]
 
         # Filter by price range

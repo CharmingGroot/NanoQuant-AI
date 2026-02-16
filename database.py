@@ -74,6 +74,22 @@ class TradingDatabase:
                 )
             ''')
 
+            # decision_followups 테이블 (모든 판단의 사후 추적: 가격, 옳고그름, LLM 학습메모)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS decision_followups (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    decision_id INTEGER NOT NULL,
+                    followup_price REAL NOT NULL,
+                    followup_at TEXT NOT NULL,
+                    pnl_pct REAL NOT NULL,
+                    is_success INTEGER,
+                    reflection_note TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (decision_id) REFERENCES decisions (id),
+                    UNIQUE (decision_id)
+                )
+            ''')
+
             # Index for faster queries
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_decisions_ticker
@@ -83,6 +99,29 @@ class TradingDatabase:
                 CREATE INDEX IF NOT EXISTS idx_decisions_timestamp
                 ON decisions (timestamp)
             ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_decision_followups_decision
+                ON decision_followups (decision_id)
+            ''')
+
+            # 마이그레이션: 기존 decision_followups에 is_success, reflection_note 컬럼 추가
+            cursor.execute("PRAGMA table_info(decision_followups)")
+            cols = [row[1] for row in cursor.fetchall()]
+            if 'is_success' not in cols:
+                cursor.execute("ALTER TABLE decision_followups ADD COLUMN is_success INTEGER")
+            if 'reflection_note' not in cols:
+                cursor.execute("ALTER TABLE decision_followups ADD COLUMN reflection_note TEXT")
+
+            # 마이그레이션: hold_followups → decision_followups (기존 DB 호환)
+            cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='hold_followups'"
+            )
+            if cursor.fetchone():
+                cursor.execute('''
+                    INSERT OR IGNORE INTO decision_followups (decision_id, followup_price, followup_at, pnl_pct)
+                    SELECT decision_id, followup_price, followup_at, pnl_pct FROM hold_followups
+                    WHERE decision_id NOT IN (SELECT decision_id FROM decision_followups)
+                ''')
 
     def log_decision(
         self,
@@ -218,6 +257,116 @@ class TradingDatabase:
             print(f"Error fetching unreflected decisions: {str(e)}")
             return []
 
+    def get_decisions_for_followup(
+        self,
+        min_hours_ago: int = 24,
+        limit: int = 50
+    ) -> List[Dict]:
+        """
+        Get decisions (BUY/SELL/HOLD) that haven't been followed up yet
+        (판단 사후 추적 → 옳고 그름 측정용)
+
+        Args:
+            min_hours_ago: 최소 경과 시간 (시간)
+            limit: 최대 건수
+
+        Returns:
+            List of decisions without followup
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                cursor.execute('''
+                    SELECT d.* FROM decisions d
+                    LEFT JOIN decision_followups f ON d.id = f.decision_id
+                    WHERE f.id IS NULL
+                    AND d.price > 0
+                    AND datetime(d.timestamp) <= datetime('now', '-' || ? || ' hours')
+                    ORDER BY d.timestamp ASC
+                    LIMIT ?
+                ''', (min_hours_ago, limit))
+
+                rows = cursor.fetchall()
+                return [dict(row) for row in rows]
+
+        except Exception as e:
+            print(f"Error fetching decisions for followup: {str(e)}")
+            return []
+
+    def log_decision_followup(
+        self,
+        decision_id: int,
+        followup_price: float,
+        pnl_pct: float,
+        is_success: bool = None,
+        reflection_note: str = None
+    ) -> int:
+        """
+        Log followup result for any decision (BUY/SELL/HOLD)
+        사후 추적 + 리플렉션(학습메모) 통합 저장
+
+        Args:
+            decision_id: Decision ID
+            followup_price: N시간 후 가격
+            pnl_pct: (followup_price - decision_price) / decision_price * 100
+            is_success: 올바른 판단 여부
+            reflection_note: LLM 생성 학습 메모
+
+        Returns:
+            decision_followup ID
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                cursor.execute('''
+                    INSERT INTO decision_followups
+                    (decision_id, followup_price, followup_at, pnl_pct, is_success, reflection_note)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (
+                    decision_id, followup_price, datetime.now().isoformat(), pnl_pct,
+                    1 if is_success else 0 if is_success is False else None,
+                    reflection_note
+                ))
+
+                return cursor.lastrowid
+
+        except Exception as e:
+            print(f"Error logging decision followup: {str(e)}")
+            return -1
+
+    def get_decision_followups(self, limit: int = 100) -> List[Dict]:
+        """
+        Get all decisions with their followup results (판단 사후 추적 리포트용)
+
+        Returns:
+            List of {decision fields, action, reasoning, metadata, followup_price, pnl_pct, ...}
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                cursor.execute('''
+                    SELECT
+                        d.id, d.ticker, d.action, d.timestamp, d.price AS decision_price,
+                        d.reasoning, d.confidence, d.risk_level, d.trigger_score,
+                        d.metadata,
+                        f.followup_price, f.followup_at, f.pnl_pct,
+                        f.is_success, f.reflection_note
+                    FROM decisions d
+                    JOIN decision_followups f ON d.id = f.decision_id
+                    ORDER BY d.timestamp DESC
+                    LIMIT ?
+                ''', (limit,))
+
+                rows = cursor.fetchall()
+                return [dict(row) for row in rows]
+
+        except Exception as e:
+            print(f"Error fetching decision followups: {str(e)}")
+            return []
+
     def log_reflection(
         self,
         decision_id: int,
@@ -265,13 +414,8 @@ class TradingDatabase:
 
     def get_recent_reflections(self, limit: int = 10) -> List[Dict]:
         """
-        Get recent reflections with decision details
-
-        Args:
-            limit: Maximum number of results
-
-        Returns:
-            List of reflections with decision context
+        Get recent 사후 추적 결과 (decision_followups 기준)
+        리플렉션 로직 통합으로 decision_followups가 단일 소스
         """
         try:
             with self.get_connection() as conn:
@@ -284,14 +428,14 @@ class TradingDatabase:
                         d.price AS decision_price,
                         d.reasoning AS decision_reasoning,
                         d.confidence,
-                        r.target_price,
-                        r.profit_loss,
-                        r.is_success,
-                        r.reflection_note,
-                        r.eval_timestamp
-                    FROM reflections r
-                    JOIN decisions d ON r.decision_id = d.id
-                    ORDER BY r.eval_timestamp DESC
+                        f.followup_price AS target_price,
+                        f.pnl_pct AS profit_loss,
+                        f.is_success,
+                        f.reflection_note,
+                        f.followup_at AS eval_timestamp
+                    FROM decision_followups f
+                    JOIN decisions d ON f.decision_id = d.id
+                    ORDER BY f.followup_at DESC
                     LIMIT ?
                 ''', (limit,))
 
@@ -301,6 +445,27 @@ class TradingDatabase:
         except Exception as e:
             print(f"Error fetching reflections: {str(e)}")
             return []
+
+    def get_learning_summary(self, limit: int = 5) -> str:
+        """
+        LLM 프롬프트용 학습 요약 (decision_followups 기준)
+        """
+        rows = self.get_recent_reflections(limit=limit)
+        if not rows:
+            return "No prior reflections available."
+
+        summary = "📚 Recent Learnings from Past Decisions:\n\n"
+        for i, r in enumerate(rows, 1):
+            success_marker = "✓" if r.get('is_success') else "✗"
+            summary += f"{i}. {success_marker} {r['ticker']} ({r['action']}) - {r.get('profit_loss', 0):+.1f}%\n"
+            summary += f"   Original: {(r.get('decision_reasoning') or '')[:60]}...\n"
+            summary += f"   Learning: {(r.get('reflection_note') or '')[:100]}...\n\n"
+
+        stats = self.get_success_rate(days=7)
+        summary += f"Recent Performance (7 days):\n"
+        summary += f"  Success Rate: {stats['success_rate']:.1f}%\n"
+        summary += f"  Avg P/L: {stats['avg_pnl']:+.2f}%\n"
+        return summary
 
     def get_success_rate(
         self,
@@ -324,11 +489,11 @@ class TradingDatabase:
                 query = '''
                     SELECT
                         COUNT(*) as total,
-                        SUM(r.is_success) as successes,
-                        AVG(r.profit_loss) as avg_pnl
-                    FROM reflections r
-                    JOIN decisions d ON r.decision_id = d.id
-                    WHERE datetime(r.eval_timestamp) >= datetime('now', '-' || ? || ' days')
+                        SUM(f.is_success) as successes,
+                        AVG(f.pnl_pct) as avg_pnl
+                    FROM decision_followups f
+                    JOIN decisions d ON f.decision_id = d.id
+                    WHERE datetime(f.followup_at) >= datetime('now', '-' || ? || ' days')
                 '''
                 params = [days]
 
