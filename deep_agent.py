@@ -86,6 +86,7 @@ class DeepAgent:
         learning_summary: str = None,
         quant_indicators: Dict = None,
         current_price: float = None,
+        use_news: bool = True,
     ) -> str:
         """
         Build analysis prompt for LLM
@@ -123,12 +124,15 @@ class DeepAgent:
         for i, bar in enumerate(chart_data[-5:]):  # Last 5 bars
             prompt += f"\n{i+1}. Open: ${bar.get('open', 0):.2f}, High: ${bar.get('high', 0):.2f}, Low: ${bar.get('low', 0):.2f}, Close: ${bar.get('close', 0):.2f}, Volume: {bar.get('volume', 0):,.0f}"
 
-        prompt += f"\n\n**Recent News Headlines**:\n"
-        if news_items:
-            for i, item in enumerate(news_items[:5]):
-                prompt += f"\n{i+1}. {item.get('title', 'No title')} ({item.get('time', 'Unknown time')})"
+        if use_news:
+            prompt += f"\n\n**Recent News Headlines**:\n"
+            if news_items:
+                for i, item in enumerate(news_items[:5]):
+                    prompt += f"\n{i+1}. {item.get('title', 'No title')} ({item.get('time', 'Unknown time')})"
+            else:
+                prompt += "No recent news available."
         else:
-            prompt += "No recent news available."
+            prompt += "\n\n(뉴스 데이터는 이번 분석에서 미사용. 지표·차트만 참고할 것.)"
 
         qi = quant_indicators or {}
         if qi:
@@ -199,11 +203,11 @@ Analyze the above data and make ONE of these decisions:
 **Guidelines**:
 - This is small-cap trading with ~$75 total capital
 - Only trade if confidence >= 65 (balanced aggression)
-- Consider: Is the news catalyst real? Is volume confirming? Is the price action sustainable?
+- Consider: Is volume confirming? Is the price action sustainable?{f' Is the news catalyst real?' if use_news else ''}
 - Multi-timeframe: 1d = trend context, 1h = structure, 15m = entry timing
 - Use quant indicators: RSI<30 oversold (반등 후보), RSI>70 overbought; MACD histogram sign = trend; Bollinger %B = position
 - **SELL 시**: 매수가 대비 현재가·평가손익을 고려하여 수익실현/손절 판단
-- When RSI oversold + news catalyst align, lean toward taking a small position rather than waiting for "perfect" confirmation
+- When RSI oversold + {'news catalyst align' if use_news else 'volume confirms'}, lean toward taking a small position rather than waiting for "perfect" confirmation
 - Avoid pump-and-dumps and illiquid stocks; but do not over-wait for perfect signals
 - **reasoning** 필드는 반드시 한국어로 작성할 것
 
@@ -222,6 +226,7 @@ Respond with ONLY the JSON object, no other text.
         learning_summary: str = None,
         quant_indicators: Dict = None,
         current_price: float = None,
+        use_news: bool = True,
     ) -> TradingDecision:
         """
         Analyze stock and make trading decision
@@ -243,6 +248,7 @@ Respond with ONLY the JSON object, no other text.
             trigger_reasons, current_balance, current_positions, learning_summary,
             quant_indicators=quant_indicators,
             current_price=current_price,
+            use_news=use_news,
         )
 
         # Call LLM API
