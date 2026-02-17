@@ -22,12 +22,17 @@ env/
 dist/
 build/
 
-# === 프로젝트 런타임 ===
+# === 프로젝트 런타임 (생성물·로그·DB) ===
 nanoquant*.db
+nanoquant_v1.db
 *.db
+*.sqlite
+*.sqlite3
 nanoquant.log
 *.log
 trade_history.json
+wrong_decisions.json
+watchlist.json
 
 # === IDE / OS ===
 .idea/
