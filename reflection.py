@@ -1,22 +1,22 @@
 """
-reflection.py - (Deprecated) 리플렉션 로직은 missed_profit.py로 통합됨
+reflection.py - (Deprecated) 리플렉션 로직은 followup/로 이동됨
 
-사후 추적 + LLM 학습 메모는 missed_profit.run_decision_followup_cycle()에서 처리.
+사후 추적 + LLM 학습 메모는 followup.run_decision_followup_cycle()에서 처리.
 학습 요약은 database.TradingDatabase.get_learning_summary() 사용.
 """
 
 # 하위 호환: ReflectionEngine을 사용하는 외부 스크립트용 스텁
-from missed_profit import run_decision_followup_cycle
-from database import TradingDatabase
+from followup import run_decision_followup_cycle
+from core import TradingDatabase
 
 
 class ReflectionEngine:
-    """Deprecated. Use missed_profit.run_decision_followup_cycle + db.get_learning_summary"""
+    """Deprecated. Use followup.run_decision_followup_cycle + db.get_learning_summary"""
 
     def __init__(self, db_path: str = 'nanoquant_v1.db', ai_model: str = 'claude'):
         import warnings
         warnings.warn(
-            "ReflectionEngine is deprecated. Use missed_profit.run_decision_followup_cycle() and db.get_learning_summary()",
+            "ReflectionEngine is deprecated. Use followup.run_decision_followup_cycle() and db.get_learning_summary()",
             DeprecationWarning,
             stacklevel=2
         )

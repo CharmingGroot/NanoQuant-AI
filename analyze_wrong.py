@@ -3,7 +3,8 @@
 import sqlite3
 import os
 
-os.chdir(os.path.dirname(os.path.abspath(__file__)))
+from util import project_root
+os.chdir(project_root())
 conn = sqlite3.connect('nanoquant_v1.db')
 conn.row_factory = sqlite3.Row
 cur = conn.cursor()

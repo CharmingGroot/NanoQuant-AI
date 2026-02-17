@@ -3,6 +3,7 @@ main.py - Main orchestration loop for NanoQuant AI (yfinance + Simulation Mode)
 """
 
 import time
+import uuid
 from datetime import datetime
 from typing import List, Dict
 import schedule
@@ -11,28 +12,10 @@ from dotenv import load_dotenv
 import os
 import json
 
-from data_fetcher import DataFetcher
-from scraper import StockScraper
-from trigger import EventTrigger
-from deep_agent import DeepAgent, TradingDecision
-from database import TradingDatabase
+from core import DataFetcher, StockScraper, EventTrigger, DeepAgent, TradingDecision, TradingDatabase
 from quant_rules import compute_all_multi
-from missed_profit import run_decision_followup_cycle
-
-
-def _serialize_quant_multi(quant_multi: dict) -> dict:
-    """다중 타임프레임 quant_indicators를 JSON/DB 저장 가능한 형태로 직렬화"""
-    out = {}
-    for tf, indicators in (quant_multi or {}).items():
-        if not indicators:
-            continue
-        ser = {}
-        for k, v in indicators.items():
-            if v is None:
-                continue
-            ser[k] = list(v) if isinstance(v, tuple) else v
-        out[tf] = ser
-    return out
+from followup import run_decision_followup_cycle
+from util import serialize_quant_multi, path_for
 
 
 # Configure logging
@@ -61,17 +44,22 @@ class Portfolio:
         shares = amount / price
 
         if ticker in self.positions:
-            # Average down/up
+            # Average down/up (keep original opened_at)
             current_value = self.positions[ticker]['qty'] * self.positions[ticker]['avg_price']
             new_value = amount
             total_qty = self.positions[ticker]['qty'] + shares
 
             self.positions[ticker] = {
                 'qty': total_qty,
-                'avg_price': (current_value + new_value) / total_qty
+                'avg_price': (current_value + new_value) / total_qty,
+                'opened_at': self.positions[ticker].get('opened_at'),
             }
         else:
-            self.positions[ticker] = {'qty': shares, 'avg_price': price}
+            self.positions[ticker] = {
+                'qty': shares,
+                'avg_price': price,
+                'opened_at': datetime.now().isoformat(),
+            }
 
         self.cash -= amount
         self.trade_history.append({
@@ -157,15 +145,17 @@ class Portfolio:
                 if not action or not ticker:
                     continue
                 if action == 'BUY' and price > 0:
+                    ts = record.get('timestamp', '')
                     if ticker in self.positions:
                         current_value = self.positions[ticker]['qty'] * self.positions[ticker]['avg_price']
                         total_qty = self.positions[ticker]['qty'] + shares
                         self.positions[ticker] = {
                             'qty': total_qty,
-                            'avg_price': (current_value + amount) / total_qty
+                            'avg_price': (current_value + amount) / total_qty,
+                            'opened_at': self.positions[ticker].get('opened_at'),
                         }
                     else:
-                        self.positions[ticker] = {'qty': shares, 'avg_price': price}
+                        self.positions[ticker] = {'qty': shares, 'avg_price': price, 'opened_at': ts}
                     self.cash -= amount
                 elif action == 'SELL':
                     if ticker not in self.positions:
@@ -187,7 +177,7 @@ class NanoQuantAI:
     Main orchestrator for the NanoQuant AI trading system
 
     Architecture:
-    - Layer 1: Quant Scanner (daily/hourly) - selects 50 small-cap candidates
+    - Layer 1: Quant Scanner (daily/hourly) - sector-based ~100 each, up to 500 candidates
     - Layer 2: Event-Driven Trigger (every 15 min) - scores candidates
     - Layer 3: Deep Agent (on trigger) - LLM analyzes and makes decisions
 
@@ -239,7 +229,7 @@ class NanoQuantAI:
                 self.db = TradingDatabase('nanoquant_v1.db')
                 if simulation_mode:
                     self.portfolio = Portfolio(initial_cash=trading_capital)
-                    _history_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'trade_history.json')
+                    _history_path = path_for('trade_history.json')
                     if self.portfolio.load_from_history(_history_path):
                         logger.info(
                             "Portfolio restored from trade_history.json "
@@ -263,8 +253,8 @@ class NanoQuantAI:
         """
         Layer 1: Quant Scanner
 
-        Scans universe of US small-cap stocks and selects top 50 candidates
-        based on low PBR/PER and volume
+        Scans universe of US small-cap stocks (섹터별 ~100종목) and selects
+        candidates by price filter. 트리거가 엄격하므로 LLM 호출은 소수.
 
         Returns:
             List of ticker symbols
@@ -272,7 +262,8 @@ class NanoQuantAI:
         logger.info("=" * 60)
         logger.info("LAYER 1: Scanning for small-cap candidates...")
 
-        candidates = self.data_fetcher.scan_small_caps(limit=50)
+        limit = int(os.getenv('LAYER1_CANDIDATE_LIMIT', 500))
+        candidates = self.data_fetcher.scan_small_caps(limit=limit)
 
         logger.info(f"[OK] Selected {len(candidates)} candidates: {', '.join(candidates)}")
         logger.info("=" * 60)
@@ -292,10 +283,10 @@ class NanoQuantAI:
             List of (ticker, TriggerScore) for triggered stocks
         """
         logger.info("\n" + "=" * 60)
-        logger.info(f"LAYER 2: Evaluating triggers ({datetime.now().strftime('%H:%M:%S')})")
+        logger.info("[레이어2] 트리거 평가 시작 (%s)", datetime.now().strftime('%H:%M:%S'))
 
         if not self.candidate_pool:
-            logger.warning("No candidates in pool. Running Layer 1 scan...")
+            logger.warning("후보 풀 비어있음. 레이어1 스캔 실행...")
             self.candidate_pool = self.layer1_scan_candidates()
 
         triggered_stocks = []
@@ -308,13 +299,13 @@ class NanoQuantAI:
             _empty_news = {'found': False, 'matches': []}
 
             for ticker in self.candidate_pool:
-                logger.info(f"  Analyzing {ticker}...")
+                logger.info("  분석 중: %s", ticker)
 
                 # Get market data
                 snapshot = self.data_fetcher.get_stock_snapshot(ticker)
 
                 if not snapshot['data_available']:
-                    logger.warning(f"    [X] No data available for {ticker}")
+                    logger.warning("    [X] %s 데이터 없음", ticker)
                     continue
 
                 # Get news data (skip when USE_NEWS_FOR_TRADING=0)
@@ -335,7 +326,7 @@ class NanoQuantAI:
                     '1d': snapshot.get('bars_1d', []),
                 })
                 quant_multi = compute_all_multi(bars_dict)
-                quant_serial = _serialize_quant_multi(quant_multi)
+                quant_serial = serialize_quant_multi(quant_multi)
 
                 stock_data.append({
                     'ticker': ticker,
@@ -350,17 +341,23 @@ class NanoQuantAI:
                     'news_items': news_items
                 })
 
-            # Evaluate triggers
-            triggered = self.trigger_engine.get_triggered_stocks(stock_data)
+            # Evaluate triggers (전체 결과 조회 후 로그)
+            all_results = self.trigger_engine.batch_evaluate(stock_data)
+            triggered = [(t, s) for t, s in all_results if s.triggered]
 
-            logger.info(f"\n[OK] Triggered stocks: {len(triggered)}/{len(stock_data)}")
+            # Layer 2 결과 한국어 로그
+            logger.info("\n[레이어2 결과] 전체 %d종목 중 %d종목 트리거 발동 (임계값: %d점)",
+                       len(stock_data), len(triggered), self.trigger_engine.TRIGGER_THRESHOLD)
+            for ticker, score in all_results:
+                status = "✓ 발동" if score.triggered else "미발동"
+                logger.info("  %s | 가격:%d/40 뉴스:%d/40 거래량:%d/20 | 총 %d점 [%s]",
+                            ticker, score.price_score, score.news_score, score.volume_score,
+                            score.total_score, status)
+                if score.reasons:
+                    for r in score.reasons:
+                        logger.info("    └ %s", r)
 
             for ticker, score in triggered:
-                logger.info(f"\n  {ticker} - {score.total_score} points (TRIGGERED)")
-                for reason in score.reasons:
-                    logger.info(f"    {reason}")
-
-                # Find corresponding stock data
                 stock_info = next((s for s in stock_data if s['ticker'] == ticker), None)
                 if stock_info:
                     triggered_stocks.append((ticker, score, stock_info))
@@ -392,7 +389,11 @@ class NanoQuantAI:
         # Get current balance and positions
         current_balance = self.portfolio.cash
         position_dict = {
-            t: {'qty': p['qty'], 'avg_price': p['avg_price']}
+            t: {
+                'qty': p['qty'],
+                'avg_price': p['avg_price'],
+                'opened_at': p.get('opened_at'),
+            }
             for t, p in self.portfolio.positions.items()
         }
 
@@ -421,10 +422,21 @@ class NanoQuantAI:
 
         # Log decision to database (사유 근거 + 퀀트 지표 포함)
         news_items = stock_info.get('news_items', [])
+        hold_mins = None
+        if ticker in position_dict:
+            opened_at = position_dict[ticker].get('opened_at')
+            if opened_at:
+                try:
+                    dt = datetime.fromisoformat(str(opened_at).replace('Z', '+00:00'))
+                    now = datetime.now(dt.tzinfo) if dt.tzinfo else datetime.now()
+                    hold_mins = max(0, int((now - dt).total_seconds() / 60))
+                except (ValueError, TypeError):
+                    pass
         metadata = {
             'trigger_reasons': score.reasons,
             'news_headlines': [{'title': n.get('title', ''), 'time': n.get('time', ''), 'link': n.get('link', '')} for n in news_items],
             'news_count': len(news_items),
+            'hold_duration_minutes': hold_mins,
             'matched_keywords': stock_info.get('matched_keywords', []),
             'current_price': stock_info.get('current_price'),
             'prev_price': stock_info.get('prev_price'),
@@ -441,6 +453,7 @@ class NanoQuantAI:
             reasoning=decision.reasoning,
             trigger_score=score.total_score,
             metadata=metadata,
+            cycle_id=getattr(self, '_current_cycle_id', None),
         )
 
         if decision_id > 0:
@@ -472,18 +485,47 @@ class NanoQuantAI:
 
         try:
             if decision.action == 'BUY':
-                # Check if we have enough cash
-                if self.portfolio.cash < decision.amount:
-                    logger.warning(f"  Insufficient cash: ${self.portfolio.cash:.2f} < ${decision.amount:.2f}")
+                # 포지션 사이징: MAX_POSITIONS, MAX_POSITION_PCT, MAX_POSITION_SIZE
+                max_positions = int(os.getenv('MAX_POSITIONS', 5))
+                max_position_pct = float(os.getenv('MAX_POSITION_PCT', 20))
+
+                if ticker not in self.portfolio.positions and len(self.portfolio.positions) >= max_positions:
+                    logger.warning(f"  Skipping BUY for {ticker} (max positions {max_positions} reached)")
                     return
 
-                self.portfolio.buy(ticker, decision.amount, current_price)
-                logger.info(f"  [OK] [SIMULATION] BUY: {ticker} ${decision.amount:.2f} @ ${current_price:.2f}")
+                total_value = self.portfolio.get_total_value(self.data_fetcher)
+                max_by_pct = total_value * (max_position_pct / 100)
+                amount = min(
+                    decision.amount,
+                    self.max_position_size,
+                    max_by_pct,
+                )
+
+                if amount < 0.01:
+                    logger.warning(f"  Skipping BUY for {ticker} (computed amount ${amount:.2f} too small)")
+                    return
+
+                # Check if we have enough cash
+                if self.portfolio.cash < amount:
+                    logger.warning(f"  Insufficient cash: ${self.portfolio.cash:.2f} < ${amount:.2f}")
+                    return
+
+                self.portfolio.buy(ticker, amount, current_price)
+                logger.info(f"  [OK] [SIMULATION] BUY: {ticker} ${amount:.2f} @ ${current_price:.2f}")
 
             elif decision.action == 'SELL':
                 if ticker not in self.portfolio.positions:
                     logger.warning(f"  No position to sell for {ticker}")
                     return
+
+                # 같은 가격 매매 방지: 매수가 대비 변동률이 임계값 미만이면 수수료만 낭비하므로 스킵
+                avg_price = self.portfolio.positions[ticker]['avg_price']
+                if avg_price > 0:
+                    pct_change = abs((current_price - avg_price) / avg_price) * 100
+                    threshold = float(os.getenv('SAME_PRICE_SELL_THRESHOLD_PCT', 0.3))
+                    if pct_change < threshold:
+                        logger.info(f"  Skipping SELL for {ticker} (price change {pct_change:.2f}% < {threshold}% threshold)")
+                        return
 
                 amount_sold = self.portfolio.sell(ticker, decision.amount, current_price)
                 logger.info(f"  [OK] [SIMULATION] SELL: {ticker} {decision.amount}% @ ${current_price:.2f} (${amount_sold:.2f})")
@@ -496,6 +538,74 @@ class NanoQuantAI:
         except Exception as e:
             logger.error(f"  [X] Failed to execute trade for {ticker}: {str(e)}")
 
+    def _check_stop_take(self):
+        """
+        손절/익절 규칙 기반 자동 매도.
+        보유 포지션 각각에 대해 매수가 대비 손익률을 계산하고,
+        STOP_LOSS_PERCENT / TAKE_PROFIT_PERCENT 충족 시 100% 청산.
+        STOP_TAKE_MIN_HOLD_MINUTES 미만 보유는 미적용 (노이즈 방지).
+        """
+        if not self.portfolio.positions:
+            return
+
+        stop_loss = float(os.getenv('STOP_LOSS_PERCENT', 5))
+        take_profit = float(os.getenv('TAKE_PROFIT_PERCENT', 10))
+        min_hold_mins = int(os.getenv('STOP_TAKE_MIN_HOLD_MINUTES', 15))
+
+        for ticker in list(self.portfolio.positions.keys()):
+            pos = self.portfolio.positions.get(ticker)
+            if not pos:
+                continue
+            avg_price = pos.get('avg_price', 0)
+            if not avg_price:
+                continue
+
+            current_price = self.data_fetcher.get_current_price(ticker)
+            if not current_price or current_price <= 0:
+                continue
+
+            pnl_pct = (current_price - avg_price) / avg_price * 100
+
+            # 보유 최소 시간 체크
+            opened_at = pos.get('opened_at')
+            if opened_at:
+                try:
+                    dt = datetime.fromisoformat(str(opened_at).replace('Z', '+00:00'))
+                    now = datetime.now(dt.tzinfo) if dt.tzinfo else datetime.now()
+                    hold_mins = max(0, int((now - dt).total_seconds() / 60))
+                    if hold_mins < min_hold_mins:
+                        continue
+                except (ValueError, TypeError):
+                    pass
+
+            reason = None
+            if pnl_pct <= -stop_loss:
+                reason = f"손절 ({pnl_pct:+.1f}%)"
+            elif pnl_pct >= take_profit:
+                reason = f"익절 ({pnl_pct:+.1f}%)"
+
+            if not reason:
+                continue
+
+            logger.info(f"  [STOP/TAKE] {ticker}: {reason} → 100% 청산")
+            amount_sold = self.portfolio.sell(ticker, 100.0, current_price)
+            self.db.log_decision(
+                ticker=ticker,
+                action='SELL',
+                price=current_price,
+                amount=100.0,  # %
+                confidence=100.0,
+                risk_level='LOW',
+                reasoning=reason,
+                trigger_score=0,
+                metadata={'auto_stop_take': True, 'pnl_pct': pnl_pct},
+                cycle_id=getattr(self, '_current_cycle_id', None),
+            )
+            logger.info(f"  [OK] [SIMULATION] SELL: {ticker} 100% @ ${current_price:.2f} (${amount_sold:.2f})")
+            total_value = self.portfolio.get_total_value(self.data_fetcher)
+            pnl = self.portfolio.get_pnl(self.data_fetcher)
+            logger.info(f"  Portfolio: Cash=${self.portfolio.cash:.2f} | Total=${total_value:.2f} | P/L={pnl:+.2f}")
+
     def run_decision_followup_cycle(self):
         """
         모든 판단(BUY/SELL/HOLD)의 사후 추적 (가격, 옳고그름, LLM 학습메모)
@@ -506,7 +616,7 @@ class NanoQuantAI:
             logger.info(f"DECISION FOLLOWUP CYCLE: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             logger.info("=" * 60)
 
-            db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'nanoquant_v1.db')
+            db_path = path_for('nanoquant_v1.db')
             n = run_decision_followup_cycle(db_path=db_path, min_hours_ago=24, max_followups=30)
 
             logger.info(f"[OK] Decision followup cycle completed: {n} followups processed\n")
@@ -527,8 +637,14 @@ class NanoQuantAI:
         logger.info("=" * 60)
 
         try:
+            cycle_id = datetime.now().strftime('%Y-%m-%dT%H:%M') + '-' + uuid.uuid4().hex[:6]
+            self._current_cycle_id = cycle_id
+
             # Layer 2: Evaluate triggers
             triggered_stocks = self.layer2_evaluate_triggers()
+
+            # 손절/익절 자동 체크: 트리거 여부와 무관하게 항상 실행 (보유 포지션 관리)
+            self._check_stop_take()
 
             if not triggered_stocks:
                 logger.info("\n[OK] No stocks triggered this cycle")
@@ -550,7 +666,7 @@ class NanoQuantAI:
                 time.sleep(2)
 
             # Save trade history (프로젝트 루트 기준, db_viewer와 동일 경로)
-            self.portfolio.save_history(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'trade_history.json'))
+            self.portfolio.save_history(path_for('trade_history.json'))
 
             logger.info(f"\n[OK] Cycle completed at {datetime.now().strftime('%H:%M:%S')}")
 

@@ -13,7 +13,7 @@ import os
 
 from dotenv import load_dotenv
 
-from missed_profit import run_decision_followup_cycle
+from followup import run_decision_followup_cycle
 
 logging.basicConfig(
     level=logging.INFO,
@@ -34,7 +34,8 @@ def main():
     parser.add_argument('--model', type=str, default='claude', choices=['claude', 'gpt'], help='AI 모델')
     args = parser.parse_args()
 
-    db_path = args.db or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'nanoquant_v1.db')
+    from util import path_for
+    db_path = args.db or path_for('nanoquant_v1.db')
 
     logger.info("=" * 60)
     logger.info("리플렉션 실행 (판단 사후 추적 + LLM 학습메모)")

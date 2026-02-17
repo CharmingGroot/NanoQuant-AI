@@ -268,10 +268,10 @@ python -m playwright install chromium
 ## 📈 향후 개선 사항
 
 - [ ] 실제 브로커 API 연동 (한국투자증권 KIS API 등)
-- [ ] Supabase 데이터베이스 연동
-- [ ] React 대시보드 구현
-- [ ] 백테스팅 기능 (VectorBT)
-- [ ] 손절/익절 자동 관리
+- [ ] Supabase 데이터베이스 연동 (현재 SQLite 사용)
+- [ ] React 대시보드 구현 (현재 Flask + HTML)
+- [x] 백테스팅 기능 (`backtest.py` - trade_history.json 기반)
+- [x] 손절/익절 자동 관리 (`_check_stop_take`)
 - [ ] Telegram 알림 기능
 - [ ] 다중 계정 관리
 

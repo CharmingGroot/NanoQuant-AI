@@ -9,18 +9,20 @@ Open http://127.0.0.1:5050 in browser. Page auto-refreshes every 10 seconds.
 
 import os
 import json
-from flask import Flask, render_template_string, request
-from database import TradingDatabase
+from flask import Flask, render_template_string, request, jsonify
+from core import TradingDatabase
+from util import path_for
+from ui import parse_decision_meta, get_followup_data, load_portfolio, get_watchlist
 
 app = Flask(__name__)
-_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.environ.get('NANOQUANT_DB', os.path.join(_BASE_DIR, 'nanoquant_v1.db'))
-TRADE_HISTORY_PATH = os.environ.get('TRADE_HISTORY_PATH', os.path.join(_BASE_DIR, 'trade_history.json'))
+DB_PATH = os.environ.get('NANOQUANT_DB', path_for('nanoquant_v1.db'))
+TRADE_HISTORY_PATH = os.environ.get('TRADE_HISTORY_PATH', path_for('trade_history.json'))
 db = TradingDatabase(DB_PATH)
 
-REFRESH_SECONDS = 10
-DECISIONS_LIMIT = 50
-REFLECTIONS_LIMIT = 20
+REFRESH_SECONDS = int(os.environ.get('DB_VIEWER_REFRESH_SECONDS', 0))  # 0 = 자동 리프레시 비활성화
+DECISIONS_LIMIT = int(os.environ.get('DB_VIEWER_DECISIONS_LIMIT', 50))
+DECISIONS_PER_PAGE = int(os.environ.get('DB_VIEWER_DECISIONS_PER_PAGE', 20))  # 최근 결정 탭 페이징
+REFLECTIONS_LIMIT = int(os.environ.get('DB_VIEWER_REFLECTIONS_LIMIT', 20))
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -28,7 +30,9 @@ HTML_TEMPLATE = """
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  {% if refresh_seconds > 0 %}
   <meta http-equiv="refresh" content="{{ refresh_seconds }}; url=?tab={{ active_tab }}">
+  {% endif %}
   <title>나노퀀트 DB 뷰어</title>
   <style>
     .tabs { display: flex; gap: 0; margin-bottom: 16px; border-bottom: 1px solid #334155; }
@@ -102,19 +106,23 @@ HTML_TEMPLATE = """
 </head>
 <body>
   <h1>나노퀀트 DB 뷰어</h1>
-  <p class="meta">DB: {{ db_path }} | 자동 새로고침: {{ refresh_seconds }}초 | 마지막 로드: {{ last_load }}</p>
+  <p class="meta">DB: {{ db_path }} | 자동 새로고침: {% if refresh_seconds > 0 %}{{ refresh_seconds }}초{% else %}꺼짐{% endif %} | 마지막 로드: {{ last_load }}
+    <a href="{{ request.url }}" style="margin-left:12px;display:inline-block;padding:4px 12px;background:linear-gradient(135deg,#38bdf8,#0ea5e9);color:#0f172a;text-decoration:none;border-radius:6px;font-weight:600;">새로고침</a>
+  </p>
 
   <nav class="tabs">
     <a href="?tab=decisions" class="{{ 'active' if active_tab == 'decisions' else '' }}">최근 결정</a>
     <a href="?tab=missed_profit" class="{{ 'active' if active_tab == 'missed_profit' else '' }}">판단 사후 추적</a>
     <a href="?tab=portfolio" class="{{ 'active' if active_tab == 'portfolio' else '' }}">포트폴리오</a>
+    <a href="?tab=forecast" class="{{ 'active' if active_tab == 'forecast' else '' }}">예측</a>
   </nav>
 
   <section id="tab-decisions" class="tab-pane {{ 'active' if active_tab == 'decisions' else '' }}">
-    <h2>최근 결정 (최신 {{ decisions|length }}건)</h2>
+    <h2 id="decisions-header">최근 결정 (전체 {{ decisions_total }}건, {{ decisions|length }}건 표시)</h2>
     <table>
       <thead>
         <tr>
+          <th>루프</th>
           <th>시간</th>
           <th>종목</th>
           <th>행동</th>
@@ -132,9 +140,10 @@ HTML_TEMPLATE = """
           <th>수집 데이터</th>
         </tr>
       </thead>
-      <tbody>
+      <tbody id="decisions-tbody">
         {% for d in decisions %}
         <tr>
+          <td title="{{ d.cycle_id or '' }}"><span class="cycle-dot" style="display:inline-block;width:10px;height:10px;border-radius:3px;background:{{ d._cycle_color or '#475569' }};"></span></td>
           <td>{{ d.timestamp[:19] if d.timestamp else '-' }}</td>
           <td>{{ d.ticker }}</td>
           <td class="action-{{ d.action }}">{% if d.action == 'BUY' %}매수{% elif d.action == 'SELL' %}매도{% else %}대기{% endif %}</td>
@@ -152,7 +161,7 @@ HTML_TEMPLATE = """
           <td>
             {% if d.meta %}
             <details>
-              <summary>뉴스 {{ d.meta.get('news_count', 0) }}건 · 트리거 {{ (d.meta.get('trigger_reasons') or [])|length }}개</summary>
+              <summary>뉴스 {{ d.meta.get('news_count', 0) }}건 · 트리거 {{ (d.meta.get('trigger_reasons') or [])|length }}개{% if d.meta.get('hold_duration_minutes') is not none %} · 보유 {{ d.meta.hold_duration_minutes }}분{% endif %}</summary>
               <div class="source-data">
                 {% if d.meta.get('news_headlines') %}
                 <strong>뉴스 헤드라인:</strong>
@@ -185,10 +194,15 @@ HTML_TEMPLATE = """
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="15">아직 결정 내역이 없습니다.</td></tr>
+        <tr><td colspan="16">아직 결정 내역이 없습니다.</td></tr>
         {% endfor %}
       </tbody>
     </table>
+    <div id="decisions-pagination" class="pagination" style="margin-top:16px;display:{{ 'flex' if decisions_total > decisions_per_page else 'none' }};align-items:center;gap:8px;flex-wrap:wrap;">
+      <button type="button" id="decisions-prev" data-page="{{ page - 1 }}" style="color:#7dd3fc;padding:6px 12px;background:#1e293b;border:1px solid #334155;border-radius:6px;cursor:pointer;font-size:13px;" {{ 'disabled' if page <= 1 else '' }}>← 이전</button>
+      <span id="decisions-page-info" style="color:#94a3b8;margin:0 8px;">{{ page }} / {{ total_pages }}</span>
+      <button type="button" id="decisions-next" data-page="{{ page + 1 }}" style="color:#7dd3fc;padding:6px 12px;background:#1e293b;border:1px solid #334155;border-radius:6px;cursor:pointer;font-size:13px;" {{ 'disabled' if page >= total_pages else '' }}>다음 →</button>
+    </div>
   </section>
 
   <section id="tab-missed_profit" class="tab-pane {{ 'active' if active_tab == 'missed_profit' else '' }}">
@@ -313,203 +327,281 @@ HTML_TEMPLATE = """
     <p class="meta">trade_history.json이 없거나 비어 있습니다. main.py 실행 후 거래가 발생하면 표시됩니다.</p>
     {% endif %}
   </section>
+
+  <section id="tab-forecast" class="tab-pane {{ 'active' if active_tab == 'forecast' else '' }}">
+    <h2>가격 예측 (참고용)</h2>
+    <p class="meta">등록 티커의 과거 주가로 미래 구간을 예측합니다. 실제 투자 결정과 무관합니다.</p>
+    <div class="forecast-controls" style="margin-bottom: 20px; display: flex; flex-wrap: wrap; align-items: center; gap: 14px; padding: 14px 18px; background: rgba(15,23,42,0.6); border-radius: 8px; border: 1px solid rgba(51,65,85,0.5);">
+      <label style="display:flex;align-items:center;gap:8px;">종목
+        <select id="forecast-ticker" style="background:#1e293b;color:#e2e4e8;border:1px solid #475569;padding:8px 12px;border-radius:6px;min-width:100px;font-size:13px;">
+          {% for t in watchlist %}
+          <option value="{{ t }}">{{ t }}</option>
+          {% else %}
+          <option value="">watchlist 없음</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;">모델
+        <select id="forecast-model" style="background:#1e293b;color:#e2e4e8;border:1px solid #475569;padding:8px 12px;border-radius:6px;min-width:140px;font-size:13px;">
+          <option value="arima" selected>ARIMA</option>
+          <option value="prophet">Prophet</option>
+          <option value="linear">가중치 선형</option>
+          <option value="ma">지수이동평균</option>
+        </select>
+      </label>
+      <button type="button" id="forecast-load" style="background:linear-gradient(135deg,#38bdf8,#0ea5e9);color:#0f172a;border:none;padding:8px 18px;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px;box-shadow:0 2px 8px rgba(56,189,248,0.3);">적용</button>
+    </div>
+    <div id="forecast-error" class="meta" style="color:#fca5a5;display:none;"></div>
+    <div class="forecast-chart-wrap" style="position:relative;height:420px;background:linear-gradient(135deg,#0f172a 0%,#1e293b 50%,#0f172a 100%);border-radius:12px;padding:20px;border:1px solid rgba(148,163,184,0.15);box-shadow:0 4px 24px rgba(0,0,0,0.3);">
+      <canvas id="forecast-chart"></canvas>
+    </div>
+  </section>
 </body>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+(function() {
+  function esc(s) { if (s == null || s === '') return ''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function buildMetaCell(meta) {
+    if (!meta || typeof meta !== 'object') return '-';
+    var nc = meta.news_count || 0;
+    var tr = (meta.trigger_reasons || []).length;
+    var hold = meta.hold_duration_minutes;
+    var sum = '뉴스 ' + nc + '건 · 트리거 ' + tr + '개' + (hold != null ? ' · 보유 ' + hold + '분' : '');
+    var inner = '';
+    if (meta.news_headlines && meta.news_headlines.length) {
+      inner += '<strong>뉴스 헤드라인:</strong><ul>';
+      meta.news_headlines.forEach(function(n) {
+        var t = (n.title || '-').substring(0, 80);
+        if ((n.title || '').length > 80) t += '...';
+        var lnk = n.link ? '<a href="' + esc(n.link) + '" target="_blank" rel="noopener" style="color:#7dd3fc;">' : '';
+        inner += '<li>' + lnk + esc(t) + (n.link ? '</a>' : '') + ' <span style="color:#64748b;">(' + esc(n.time || '') + ')</span></li>';
+      });
+      inner += '</ul>';
+    } else if (nc > 0) {
+      inner += '<em>뉴스 ' + nc + '건 수집됨 (헤드라인 상세 미저장 · 이전 형식 기록)</em>';
+    } else {
+      inner += '<em>수집된 뉴스 없음</em>';
+    }
+    if (meta.trigger_reasons && meta.trigger_reasons.length) {
+      inner += '<strong>트리거 사유:</strong><ul>';
+      meta.trigger_reasons.forEach(function(r) { inner += '<li>' + esc(r) + '</li>'; });
+      inner += '</ul>';
+    }
+    if (meta.matched_keywords && meta.matched_keywords.length) {
+      inner += '<strong>매칭 키워드:</strong> ' + esc(meta.matched_keywords.join(', '));
+    }
+    return '<details><summary>' + esc(sum) + '</summary><div class="source-data">' + inner + '</div></details>';
+  }
+  function buildRow(d) {
+    var ts = (d.timestamp || '-').substring(0, 19);
+    var actLabel = d.action === 'BUY' ? '매수' : (d.action === 'SELL' ? '매도' : '대기');
+    var priceStr = d.price != null ? (Number(d.price).toFixed(2)) : '-';
+    var amtStr = d._amount_display || '-';
+    var confStr = d.confidence != null ? (Number(d.confidence).toFixed(0) + '%') : '-';
+    var volStr = d._vol_ratio != null ? (Number(d._vol_ratio).toFixed(2) + 'x') : '-';
+    var reason = (d.reasoning || '-').substring(0, 60);
+    if ((d.reasoning || '').length > 60) reason += '...';
+    return '<tr>' +
+      '<td title="' + esc(d.cycle_id || '') + '"><span class="cycle-dot" style="display:inline-block;width:10px;height:10px;border-radius:3px;background:' + esc(d._cycle_color || '#475569') + ';"></span></td>' +
+      '<td>' + esc(ts) + '</td>' +
+      '<td>' + esc(d.ticker || '-') + '</td>' +
+      '<td class="action-' + esc(d.action || '') + '">' + esc(actLabel) + '</td>' +
+      '<td>' + esc(priceStr) + '</td>' +
+      '<td>' + esc(amtStr) + '</td>' +
+      '<td>' + esc(confStr) + '</td>' +
+      '<td>' + esc(d.risk_level || '-') + '</td>' +
+      '<td>' + esc(d.trigger_score != null ? String(d.trigger_score) : '-') + '</td>' +
+      '<td>' + esc(d._rsi != null ? String(d._rsi) : '-') + '</td>' +
+      '<td>' + esc(d._sma != null ? String(d._sma) : '-') + '</td>' +
+      '<td>' + esc(d._macd != null ? String(d._macd) : '-') + '</td>' +
+      '<td>' + esc(d._bb_pct != null ? String(d._bb_pct) : '-') + '</td>' +
+      '<td>' + esc(volStr) + '</td>' +
+      '<td class="reasoning" title="' + esc(d.reasoning || '') + '">' + esc(reason) + '</td>' +
+      '<td>' + buildMetaCell(d.meta) + '</td>' +
+      '</tr>';
+  }
+  function loadDecisionsPage(page) {
+    var tbody = document.getElementById('decisions-tbody');
+    var header = document.getElementById('decisions-header');
+    var pag = document.getElementById('decisions-pagination');
+    var prevBtn = document.getElementById('decisions-prev');
+    var nextBtn = document.getElementById('decisions-next');
+    var info = document.getElementById('decisions-page-info');
+    if (!tbody || !header) return;
+    tbody.innerHTML = '<tr><td colspan="16" style="color:#94a3b8;">로딩 중...</td></tr>';
+    fetch('/api/decisions?page=' + encodeURIComponent(page))
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var html = '';
+        if (!data.decisions || data.decisions.length === 0) {
+          html = '<tr><td colspan="16">아직 결정 내역이 없습니다.</td></tr>';
+        } else {
+          data.decisions.forEach(function(d) { html += buildRow(d); });
+        }
+        tbody.innerHTML = html;
+        header.textContent = '최근 결정 (전체 ' + (data.decisions_total || 0) + '건, ' + (data.decisions ? data.decisions.length : 0) + '건 표시)';
+        if (info) info.textContent = (data.page || 1) + ' / ' + (data.total_pages || 1);
+        if (prevBtn) { prevBtn.disabled = (data.page || 1) <= 1; prevBtn.dataset.page = (data.page || 1) - 1; }
+        if (nextBtn) { nextBtn.disabled = (data.page || 1) >= (data.total_pages || 1); nextBtn.dataset.page = (data.page || 1) + 1; }
+        if (pag && (data.decisions_total || 0) > (data.decisions_per_page || 20)) pag.style.display = 'flex';
+      })
+      .catch(function(e) {
+        tbody.innerHTML = '<tr><td colspan="16" style="color:#fca5a5;">로드 실패: ' + esc(e.message) + '</td></tr>';
+      });
+  }
+  var prevBtn = document.getElementById('decisions-prev');
+  var nextBtn = document.getElementById('decisions-next');
+  if (prevBtn) prevBtn.addEventListener('click', function() { var p = parseInt(prevBtn.dataset.page, 10); if (p >= 1) loadDecisionsPage(p); });
+  if (nextBtn) nextBtn.addEventListener('click', function() { var p = parseInt(nextBtn.dataset.page, 10); if (p >= 1) loadDecisionsPage(p); });
+})();
+</script>
+<script>
+(function() {
+  var chart = null;
+  function getSelected() {
+    var ticker = document.getElementById('forecast-ticker').value;
+    var model = document.getElementById('forecast-model').value;
+    return { ticker: ticker, model: model };
+  }
+  function draw(data) {
+    var ctx = document.getElementById('forecast-chart').getContext('2d');
+    if (chart) chart.destroy();
+    if (data.error) return;
+
+    var actual = data.actual_full || [];
+    var predicted = data.predicted_full || data.forecast_full || [];
+    var labels = data.labels_full || [];
+
+    var gradActual = ctx.createLinearGradient(0, 0, 0, 400);
+    gradActual.addColorStop(0, 'rgba(125, 211, 252, 0.25)');
+    gradActual.addColorStop(1, 'rgba(125, 211, 252, 0)');
+
+    var gradPred = ctx.createLinearGradient(0, 0, 0, 400);
+    gradPred.addColorStop(0, 'rgba(251, 191, 36, 0.12)');
+    gradPred.addColorStop(1, 'rgba(251, 191, 36, 0)');
+
+    chart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [
+          { label: '실제', data: actual,
+            borderColor: '#38bdf8', borderWidth: 2.5,
+            backgroundColor: gradActual, fill: true,
+            tension: 0.4, pointRadius: 0, pointHoverRadius: 6,
+            pointBackgroundColor: '#38bdf8', pointBorderColor: '#0f172a', pointBorderWidth: 2
+          },
+          { label: '예측(퀀트)', data: predicted,
+            borderColor: '#fbbf24', borderWidth: 2.5, borderDash: [8, 4],
+            backgroundColor: gradPred, fill: true,
+            tension: 0.4, pointRadius: 0, pointHoverRadius: 6,
+            pointBackgroundColor: '#fbbf24', pointBorderColor: '#0f172a', pointBorderWidth: 2
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { intersect: false, mode: 'index' },
+        plugins: {
+          legend: {
+            position: 'top',
+            labels: { color: '#e2e4e8', font: { family: 'system-ui', size: 13 }, usePointStyle: true }
+          }
+        },
+        scales: {
+          x: {
+            grid: { color: 'rgba(148,163,184,0.1)' },
+            ticks: { color: '#94a3b8', maxTicksLimit: 12, font: { size: 11 } }
+          },
+          y: {
+            grid: { color: 'rgba(148,163,184,0.1)' },
+            ticks: { color: '#94a3b8', font: { size: 11 } }
+          }
+        }
+      }
+    });
+  }
+  function load() {
+    var sel = getSelected();
+    if (!sel.ticker) return;
+    var errEl = document.getElementById('forecast-error');
+    errEl.style.display = 'none';
+    fetch('/api/forecast/' + encodeURIComponent(sel.ticker) + '?model=' + encodeURIComponent(sel.model))
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.error) { errEl.textContent = data.error; errEl.style.display = 'block'; return; }
+        draw(data);
+      })
+      .catch(function(e) { errEl.textContent = '로드 실패: ' + e.message; errEl.style.display = 'block'; });
+  }
+  document.getElementById('forecast-load').addEventListener('click', load);
+  if (document.getElementById('tab-forecast').classList.contains('active')) {
+    load();
+  }
+})();
+</script>
 </html>
 """
 
 
-def _parse_decision_meta(decisions):
-    """Parse metadata JSON, attach as 'meta', and extract quant columns for display.
-    Supports both flat quant_indicators (legacy) and multi-timeframe {15m, 1h, 1d} format."""
-    for d in decisions:
-        try:
-            d['meta'] = json.loads(d['metadata']) if d.get('metadata') else {}
-        except (json.JSONDecodeError, TypeError):
-            d['meta'] = {}
-        # 금액 표시: BUY=$5.00, SELL=50%, 대기(HOLD)=-
-        act, amt = d.get('action', ''), d.get('amount')
-        d['_amount_display'] = f'${float(amt):.2f}' if act == 'BUY' and amt is not None else (f'{float(amt):.0f}%' if act == 'SELL' and amt is not None else '-')
-        qi = d.get('meta', {}).get('quant_indicators') or {}
-        # Multi-timeframe: { '15m': {...}, '1h': {...}, '1d': {...} }
-        if isinstance(qi.get('15m'), dict) or isinstance(qi.get('1h'), dict) or isinstance(qi.get('1d'), dict):
-            q15 = qi.get('15m') or {}
-            q1h = qi.get('1h') or {}
-            q1d = qi.get('1d') or {}
-            d['_rsi'] = _fmt_mtf(q15.get('rsi'), q1h.get('rsi'), q1d.get('rsi'), '.1f')
-            d['_sma'] = _fmt_mtf(q15.get('sma_20'), q1h.get('sma_20'), q1d.get('sma_20'), '.2f')
-            d['_macd'] = _fmt_mtf(
-                (q15.get('macd') or {}).get('histogram'),
-                (q1h.get('macd') or {}).get('histogram'),
-                (q1d.get('macd') or {}).get('histogram'),
-                '.3f',
-            )
-            d['_bb_pct'] = _fmt_mtf(
-                (q15.get('bollinger') or {}).get('pct_b'),
-                (q1h.get('bollinger') or {}).get('pct_b'),
-                (q1d.get('bollinger') or {}).get('pct_b'),
-                '.2f',
-            )
-            d['_vol_ratio'] = q15.get('volume_ratio') or q1h.get('volume_ratio')
-        else:
-            d['_rsi'] = _fmt_num(qi.get('rsi'), '.1f')
-            d['_sma'] = _fmt_num(qi.get('sma_20'), '.2f')
-            d['_macd'] = _fmt_num((qi.get('macd') or {}).get('histogram'), '.3f')
-            d['_bb_pct'] = _fmt_num((qi.get('bollinger') or {}).get('pct_b'), '.2f')
-            d['_vol_ratio'] = qi.get('volume_ratio')
-    return decisions
+@app.route('/api/decisions')
+def api_decisions():
+    """페이징용: decisions JSON (테이블만 갱신, 전체 새로고침 없음)"""
+    page = max(1, int(request.args.get('page', 1)))
+    decisions_total = db.count_decisions()
+    total_pages = max(1, (decisions_total + DECISIONS_PER_PAGE - 1) // DECISIONS_PER_PAGE)
+    page = min(page, total_pages)
+    offset = (page - 1) * DECISIONS_PER_PAGE
+
+    decisions = db.get_decisions(limit=DECISIONS_PER_PAGE, offset=offset)
+    decisions = parse_decision_meta(decisions)
+
+    rows = [dict(d) for d in decisions]
+    return jsonify({
+        'decisions': rows,
+        'decisions_total': decisions_total,
+        'page': page,
+        'total_pages': total_pages,
+        'decisions_per_page': DECISIONS_PER_PAGE,
+    })
 
 
-def _fmt_mtf(v15, v1h, v1d, fmt='.1f'):
-    """Format multi-timeframe values for display: 15m / 1h / 1d (유의미한 소수 자리)"""
-    parts = []
-    for v in (v15, v1h, v1d):
-        if v is not None and isinstance(v, (int, float)):
-            parts.append(f'{float(v):{fmt}}')
-        else:
-            parts.append('-')
-    return ' / '.join(parts) if any(p != '-' for p in parts) else None
-
-
-def _fmt_num(v, fmt='.2f'):
-    """단일 수치를 표시용 소수 자리로 포맷 (레거시/혼합 데이터용)"""
-    if v is None:
-        return None
-    if isinstance(v, (int, float)):
-        return f'{float(v):{fmt}}'
-    return v
-
-
-def _load_portfolio(initial_cash: float = 75.0):
-    """
-    trade_history.json에서 포트폴리오 상태 복원 후 현재가 반영.
-
-    Returns:
-        dict with cash, total_value, pnl, pnl_pct, initial_cash, positions
-        or None if no history
-    """
-    if not os.path.exists(TRADE_HISTORY_PATH):
-        return None
+@app.route('/api/forecast/<ticker>')
+def api_forecast(ticker):
+    """예측 차트용 JSON. model=ma|linear|arima|prophet (일봉만)"""
+    if not (ticker and ticker.strip()):
+        return jsonify({'error': '티커를 선택하세요'}), 400
+    model = request.args.get('model', 'linear')
     try:
-        with open(TRADE_HISTORY_PATH, 'r', encoding='utf-8') as f:
-            history = json.load(f)
-    except (json.JSONDecodeError, TypeError):
-        return None
-    if not history or not isinstance(history, list):
-        return None
-
-    cash = initial_cash
-    positions = {}
-
-    for record in history:
-        action = record.get('action')
-        ticker = record.get('ticker')
-        shares = record.get('shares', 0)
-        price = record.get('price', 0)
-        amount = record.get('amount', 0)
-        if not action or not ticker:
-            continue
-        if action == 'BUY' and price > 0:
-            if ticker in positions:
-                cv = positions[ticker]['qty'] * positions[ticker]['avg_price']
-                total_qty = positions[ticker]['qty'] + shares
-                positions[ticker] = {'qty': total_qty, 'avg_price': (cv + amount) / total_qty}
-            else:
-                positions[ticker] = {'qty': shares, 'avg_price': price}
-            cash -= amount
-        elif action == 'SELL':
-            if ticker not in positions:
-                continue
-            positions[ticker]['qty'] -= shares
-            if positions[ticker]['qty'] < 0.001:
-                del positions[ticker]
-            cash += amount
-
-    total_value = cash
-    pos_list = []
-
-    try:
-        from data_fetcher import DataFetcher
-        fetcher = DataFetcher()
-        for ticker, pos in positions.items():
-            current_price = fetcher.get_current_price(ticker)
-            qty = pos['qty']
-            avg_price = pos['avg_price']
-            cost = qty * avg_price
-            value = (qty * current_price) if current_price else None
-            pnl_pct = ((current_price - avg_price) / avg_price * 100) if current_price and avg_price else None
-            if value is not None:
-                total_value += value
-            pos_list.append({
-                'ticker': ticker,
-                'qty': qty,
-                'avg_price': avg_price,
-                'current_price': current_price,
-                'value': value,
-                'pnl_pct': pnl_pct,
-            })
-    except Exception:
-        for ticker, pos in positions.items():
-            total_value += pos['qty'] * pos['avg_price']
-            pos_list.append({
-                'ticker': ticker,
-                'qty': pos['qty'],
-                'avg_price': pos['avg_price'],
-                'current_price': None,
-                'value': pos['qty'] * pos['avg_price'],
-                'pnl_pct': None,
-            })
-
-    pnl = total_value - initial_cash
-    pnl_pct = (pnl / initial_cash * 100) if initial_cash else 0
-
-    # 거래 내역: 최신순 (역순)
-    trade_log = list(reversed(history)) if history else []
-
-    return {
-        'cash': cash,
-        'total_value': total_value,
-        'pnl': pnl,
-        'pnl_pct': pnl_pct,
-        'initial_cash': initial_cash,
-        'positions': pos_list,
-        'trade_history': trade_log,
-    }
-
-
-def _parse_hold_followup_meta(followups):
-    """Parse metadata JSON and compute 옳고 그름 for decision followups"""
-    for h in followups:
-        try:
-            h['meta'] = json.loads(h['metadata']) if h.get('metadata') else {}
-        except (json.JSONDecodeError, TypeError):
-            h['meta'] = {}
-        # 옳고 그름: DB is_success 사용, 없으면 pnl+action으로 계산
-        action = h.get('action', 'HOLD')
-        pnl = h.get('pnl_pct') or 0
-        if h.get('is_success') is not None:
-            h['_is_correct'] = bool(h['is_success'])
-        else:
-            if action == 'BUY':
-                h['_is_correct'] = pnl > 0
-            else:
-                h['_is_correct'] = pnl < 0
-        h['_correctness_label'] = '올바름' if h['_is_correct'] else '틀림'
-    return followups
+        from forecast import get_forecast_chart_payload
+        data = get_forecast_chart_payload(ticker, model=model)
+        return jsonify(data)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/')
 def index():
     from datetime import datetime
     active_tab = request.args.get('tab', 'decisions')
-    if active_tab not in ('decisions', 'missed_profit', 'portfolio'):
+    if active_tab not in ('decisions', 'missed_profit', 'portfolio', 'forecast'):
         active_tab = 'decisions'
 
-    decisions = db.get_decisions(limit=DECISIONS_LIMIT)
-    decisions = _parse_decision_meta(decisions)
-    hold_followups = _parse_hold_followup_meta(db.get_decision_followups(limit=100))
+    page = max(1, int(request.args.get('page', 1)))
+    decisions_total = db.count_decisions()
+    total_pages = max(1, (decisions_total + DECISIONS_PER_PAGE - 1) // DECISIONS_PER_PAGE)
+    page = min(page, total_pages)
+    offset = (page - 1) * DECISIONS_PER_PAGE
+
+    decisions = db.get_decisions(limit=DECISIONS_PER_PAGE, offset=offset)
+    decisions = parse_decision_meta(decisions)
+    hold_followups = get_followup_data(db, limit=100)
 
     initial_cash = float(os.environ.get('TRADING_CAPITAL', 75))
-    portfolio = _load_portfolio(initial_cash=initial_cash)
+    portfolio = load_portfolio(TRADE_HISTORY_PATH, initial_cash=initial_cash)
+
+    watchlist = get_watchlist()
 
     return render_template_string(
         HTML_TEMPLATE,
@@ -517,10 +609,15 @@ def index():
         refresh_seconds=REFRESH_SECONDS,
         last_load=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         decisions=decisions,
+        decisions_total=decisions_total,
+        decisions_per_page=DECISIONS_PER_PAGE,
+        page=page,
+        total_pages=total_pages,
         hold_followups=hold_followups,
         portfolio=portfolio,
         active_tab=active_tab,
         trade_history_path=TRADE_HISTORY_PATH,
+        watchlist=watchlist,
     )
 
 

@@ -12,6 +12,10 @@ langchain-anthropic>=0.1.1
 # Data analysis
 vectorbt>=0.26.1
 numpy>=1.26.0,<2.0.0
+statsmodels>=0.14.0
+
+# Forecast tab (optional: prophet for Prophet model)
+# prophet>=1.1.0
 
 # Additional utilities
 requests>=2.31.0
