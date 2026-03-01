@@ -43,6 +43,7 @@
 - [03-ui-and-results.md](backtest/03-ui-and-results.md) — 탭 구성·입력 폼·결과 영역·이력
 - [04-api-and-priority.md](backtest/04-api-and-priority.md) — API·스킬·우선순위
 - [05-backtest-enhancement-plan.md](backtest/05-backtest-enhancement-plan.md) — **구체화·고도화 기획** (데이터·엔진·전략·UI·에이전트·로드맵)
+- **도구 제공 방식**: Python 백테스트 서비스는 **MCP 서버**로 도구(`get_history`, `run_backtest`)를 노출. Skill 호출 시 Node가 MCP 클라이언트로 해당 도구 호출. → [mcp-backtest-integration.md](../mcp-backtest-integration.md)
 
 ### [monitor/](monitor/)
 - [01-overview.md](monitor/01-overview.md) — 모니터 탭 역할

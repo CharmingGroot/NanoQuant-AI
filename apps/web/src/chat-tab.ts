@@ -33,28 +33,29 @@ interface SkillItem {
 @customElement("chat-tab")
 export class ChatTab extends LitElement {
   static styles = css`
-    .layout { display: flex; gap: 0; align-items: stretch; min-height: 320px; }
+    :host { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+    .layout { display: flex; gap: 0; align-items: stretch; flex: 1; min-height: 0; }
     .sidebar-left {
-      width: 260px;
+      width: 220px;
       flex-shrink: 0;
       display: flex;
       flex-direction: column;
       gap: 0;
       background: var(--nq-surface);
       border-right: 1px solid var(--nq-border-subtle);
-      padding: 12px 10px;
+      padding: 8px 8px;
     }
     .sidebar-title {
-      font-size: 0.6875rem;
+      font-size: 0.65rem;
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.06em;
       color: var(--nq-text-muted);
-      margin: 0 0 12px 0;
-      padding: 0 4px;
+      margin: 0 0 6px 0;
+      padding: 0 2px;
     }
     .btn-new {
-      padding: 10px 14px;
+      padding: 6px 10px;
       background: var(--nq-accent);
       color: #fff;
       border: none;
@@ -73,19 +74,19 @@ export class ChatTab extends LitElement {
     .session-list {
       display: flex;
       flex-direction: column;
-      gap: 4px;
+      gap: 3px;
       overflow-y: auto;
       flex: 1;
       min-height: 0;
-      margin-top: 12px;
+      margin-top: 6px;
     }
     .session-list::-webkit-scrollbar { width: 6px; }
     .session-list::-webkit-scrollbar-thumb { background: var(--nq-border); border-radius: 3px; }
     .session-item {
       display: flex;
       align-items: center;
-      gap: 8px;
-      padding: 10px 12px;
+      gap: 6px;
+      padding: 6px 8px;
       background: var(--nq-bg);
       border: 1px solid transparent;
       border-radius: var(--nq-radius-sm);
@@ -140,30 +141,30 @@ export class ChatTab extends LitElement {
       border-radius: 4px;
       color: var(--nq-text);
     }
-    .main { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 0 12px; }
+    .main { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 0 8px; min-height: 0; }
     .sidebar-right {
-      width: 240px;
+      width: 200px;
       flex-shrink: 0;
       display: flex;
       flex-direction: column;
       background: var(--nq-surface);
       border-left: 1px solid var(--nq-border-subtle);
-      padding: 12px 10px;
+      padding: 8px 8px;
       overflow-y: auto;
       max-height: 100%;
     }
     .sidebar-right::-webkit-scrollbar { width: 6px; }
     .sidebar-right::-webkit-scrollbar-thumb { background: var(--nq-border); border-radius: 3px; }
     .skill-item {
-      padding: 10px 12px;
+      padding: 6px 8px;
       border-radius: var(--nq-radius-sm);
-      font-size: 0.8125rem;
+      font-size: 0.75rem;
       color: var(--nq-text);
       cursor: pointer;
       transition: background 0.15s, border-color 0.15s;
       text-align: left;
       border: 1px solid transparent;
-      margin-bottom: 4px;
+      margin-bottom: 2px;
     }
     .skill-item:hover { background: var(--nq-surface-hover); }
     .skill-item.selected {
@@ -172,13 +173,13 @@ export class ChatTab extends LitElement {
       color: var(--nq-accent);
     }
     .skill-item .skill-name { font-weight: 600; }
-    .skill-item .skill-desc { font-size: 0.75rem; color: var(--nq-text-muted); margin-top: 4px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .skill-item .skill-desc { font-size: 0.6875rem; color: var(--nq-text-muted); margin-top: 2px; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
     .forced-skill-badge {
       display: flex;
       align-items: center;
-      gap: 8px;
-      padding: 6px 10px;
-      margin-bottom: 8px;
+      gap: 6px;
+      padding: 4px 8px;
+      margin-bottom: 4px;
       background: rgba(56, 139, 253, 0.12);
       border: 1px solid var(--nq-accent);
       border-radius: var(--nq-radius-sm);
@@ -188,17 +189,17 @@ export class ChatTab extends LitElement {
     .forced-skill-badge .clear { margin-left: auto; padding: 2px 8px; background: transparent; border: none; color: var(--nq-text-muted); cursor: pointer; border-radius: 4px; }
     .forced-skill-badge .clear:hover { color: var(--nq-text); background: var(--nq-surface-hover); }
     .section-title {
-      font-size: 1.125rem;
+      font-size: 0.9375rem;
       font-weight: 700;
       color: var(--nq-title);
-      margin: 0 0 4px 0;
+      margin: 0 0 2px 0;
       letter-spacing: -0.02em;
     }
     .hint {
-      font-size: 0.75rem;
+      font-size: 0.6875rem;
       color: var(--nq-text-muted);
-      margin-bottom: 10px;
-      line-height: 1.45;
+      margin-bottom: 6px;
+      line-height: 1.4;
     }
     .hint a {
       color: var(--nq-accent);
@@ -208,14 +209,13 @@ export class ChatTab extends LitElement {
     .hint a:hover { text-decoration: underline; }
     .log {
       flex: 1;
-      min-height: 140px;
-      max-height: 360px;
+      min-height: 0;
       overflow-y: auto;
-      padding: 16px;
+      padding: 10px 12px;
       background: var(--nq-surface-elevated);
       border: 1px solid var(--nq-border-subtle);
       border-radius: var(--nq-radius);
-      margin-bottom: 10px;
+      margin-bottom: 6px;
       box-shadow: var(--nq-shadow-sm);
     }
     .log::-webkit-scrollbar { width: 8px; }
@@ -227,44 +227,50 @@ export class ChatTab extends LitElement {
       justify-content: center;
       min-height: 0;
       text-align: center;
-      padding: 12px 16px;
+      padding: 8px 12px;
+    }
+    .empty-state-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
     }
     .empty-state-icon {
-      width: 40px;
-      height: 40px;
+      width: 28px;
+      height: 28px;
       border-radius: 50%;
       background: rgba(56, 139, 253, 0.15);
       color: var(--nq-accent);
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 1.25rem;
-      margin-bottom: 10px;
+      font-size: 0.875rem;
+      flex-shrink: 0;
     }
     .empty-state-title {
-      font-size: 0.9375rem;
+      font-size: 0.8125rem;
       font-weight: 600;
       color: var(--nq-text);
-      margin: 0 0 4px 0;
+      margin: 0;
     }
     .empty-state-sub {
-      font-size: 0.8125rem;
+      font-size: 0.75rem;
       color: var(--nq-text-muted);
-      margin: 0 0 12px 0;
-      max-width: 280px;
+      margin: 0 0 8px 0;
+      max-width: 320px;
     }
     .suggestion-chips {
       display: flex;
       flex-wrap: wrap;
-      gap: 6px;
+      gap: 4px;
       justify-content: center;
     }
     .suggestion-chip {
-      padding: 8px 14px;
+      padding: 5px 10px;
       background: var(--nq-surface);
       border: 1px solid var(--nq-border);
       border-radius: var(--nq-pill-radius);
-      font-size: 0.75rem;
+      font-size: 0.6875rem;
       color: var(--nq-text-muted);
       cursor: pointer;
       transition: background 0.15s, border-color 0.15s, color 0.15s;
@@ -275,8 +281,8 @@ export class ChatTab extends LitElement {
       color: var(--nq-accent);
     }
     .msg {
-      margin-bottom: 10px;
-      padding: 10px 14px;
+      margin-bottom: 6px;
+      padding: 6px 10px;
       border-radius: var(--nq-radius-sm);
       font-size: 0.875rem;
       line-height: 1.5;
@@ -293,17 +299,17 @@ export class ChatTab extends LitElement {
       margin-left: 16px;
     }
     .msg-role {
-      font-size: 0.75rem;
+      font-size: 0.6875rem;
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.04em;
       color: var(--nq-text-muted);
-      margin-bottom: 6px;
+      margin-bottom: 4px;
     }
     .msg-content { color: var(--nq-text); }
     .msg-tools {
-      margin-top: 10px;
-      padding-top: 10px;
+      margin-top: 6px;
+      padding-top: 6px;
       border-top: 1px solid var(--nq-border);
       font-size: 0.8125rem;
       color: var(--nq-text-muted);
@@ -325,9 +331,9 @@ export class ChatTab extends LitElement {
     }
     .input-bar {
       display: flex;
-      gap: 10px;
+      gap: 8px;
       align-items: center;
-      padding: 10px 14px;
+      padding: 6px 10px;
       background: var(--nq-surface);
       border: 1px solid var(--nq-border-subtle);
       border-radius: var(--nq-radius);
@@ -335,12 +341,12 @@ export class ChatTab extends LitElement {
     }
     input[type="text"] {
       flex: 1;
-      padding: 10px 14px;
+      padding: 6px 10px;
       background: var(--nq-bg);
       border: 1px solid var(--nq-border);
       border-radius: var(--nq-radius-sm);
       color: var(--nq-text);
-      font-size: 0.9375rem;
+      font-size: 0.875rem;
       outline: none;
       transition: border-color 0.15s, box-shadow 0.15s;
     }
@@ -350,20 +356,20 @@ export class ChatTab extends LitElement {
       box-shadow: 0 0 0 2px rgba(56, 139, 253, 0.2);
     }
     .btn-send {
-      padding: 10px 18px;
+      padding: 6px 12px;
       background: var(--nq-accent);
       color: #fff;
       border: none;
       border-radius: var(--nq-radius-sm);
       font-weight: 600;
-      font-size: 0.875rem;
+      font-size: 0.8125rem;
       cursor: pointer;
       transition: background 0.2s, transform 0.05s;
     }
     .btn-send:hover:not(:disabled) { background: var(--nq-accent-hover); }
     .btn-send:active:not(:disabled) { transform: scale(0.98); }
     .btn-send:disabled { opacity: 0.5; cursor: not-allowed; }
-    .status { margin-top: 6px; font-size: 0.75rem; color: var(--nq-text-muted); padding: 0 2px; }
+    .status { margin-top: 4px; font-size: 0.6875rem; color: var(--nq-text-muted); padding: 0 2px; }
     .status.loading { color: var(--nq-accent); }
   `;
 
@@ -616,7 +622,7 @@ export class ChatTab extends LitElement {
       <div class="layout">
         <aside class="sidebar-left">
           <button type="button" class="btn-new" @click=${() => this._newSession()}>+ 새 채팅</button>
-          <p class="sidebar-title" style="margin-top:16px;">채팅</p>
+          <p class="sidebar-title" style="margin-top:8px;">채팅</p>
           ${this.sessions.length === 0
             ? html`<p style="font-size:0.8125rem;color:var(--nq-text-muted);margin:8px 4px 0;text-align:center;">아직 대화가 없습니다.</p>`
             : ""}
@@ -669,9 +675,11 @@ export class ChatTab extends LitElement {
             ${this.messages.length === 0
               ? html`
                   <div class="empty-state">
-                    <div class="empty-state-icon">💬</div>
-                    <p class="empty-state-title">대화를 시작하세요</p>
-                    <p class="empty-state-sub">아래 예시를 눌러 바로 보내거나, 메시지를 입력해 보세요.</p>
+                    <div class="empty-state-row">
+                      <div class="empty-state-icon">💬</div>
+                      <p class="empty-state-title">대화를 시작하세요</p>
+                    </div>
+                    <p class="empty-state-sub">아래 예시를 눌러 보내거나 메시지를 입력하세요.</p>
                     <div class="suggestion-chips">
                       ${this._suggestions.map(
                         (text) => html`
@@ -734,7 +742,7 @@ export class ChatTab extends LitElement {
 
         <aside class="sidebar-right">
           <p class="sidebar-title">스킬 & 도구</p>
-          <p style="font-size:0.75rem;color:var(--nq-text-muted);margin:0 0 12px 4px;">클릭하면 이번 질의에 사용됩니다.</p>
+          <p style="font-size:0.6875rem;color:var(--nq-text-muted);margin:0 0 6px 2px;">클릭하면 이번 질의에 사용됩니다.</p>
           ${this.skills.length === 0
             ? html`<p style="font-size:0.8125rem;color:var(--nq-text-muted);">불러오는 중…</p>`
             : this.skills.map(

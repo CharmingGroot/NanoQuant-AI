@@ -7,16 +7,18 @@ type TabId = "dashboard" | "chat" | "backtest" | "monitor" | "kg" | "settings";
 export class NanoQuantApp extends LitElement {
   static styles = css`
     :host {
-      display: block;
+      display: flex;
+      flex-direction: column;
       min-height: 100vh;
       background: var(--nq-bg);
       color: var(--nq-text);
       font-family: "Plus Jakarta Sans", system-ui, sans-serif;
     }
     .header-wrap {
+      flex-shrink: 0;
       background: var(--nq-surface);
       border-bottom: 1px solid var(--nq-border);
-      padding: 20px 24px 16px;
+      padding: 12px 20px 10px;
     }
     .header-top {
       display: flex;
@@ -63,8 +65,8 @@ export class NanoQuantApp extends LitElement {
     .tabs {
       display: flex;
       gap: 4px;
-      margin-top: 16px;
-      padding-top: 12px;
+      margin-top: 10px;
+      padding-top: 8px;
       border-top: 1px solid var(--nq-border);
     }
     .tabs a {
@@ -78,7 +80,16 @@ export class NanoQuantApp extends LitElement {
     }
     .tabs a:hover { color: var(--nq-text); background: var(--nq-surface-hover); }
     .tabs a.active { color: var(--nq-text); background: var(--nq-accent); color: #fff; }
-    .pane { padding: 24px; max-width: 1000px; margin: 0 auto; }
+    .pane {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      padding: 12px 20px;
+      max-width: 1400px;
+      margin: 0 auto;
+      width: 100%;
+    }
     .card {
       background: var(--nq-surface);
       border: 1px solid var(--nq-border);

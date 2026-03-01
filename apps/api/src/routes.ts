@@ -321,7 +321,8 @@ router.post("/backtest", async (req: Request, res: Response) => {
   const end = body.end_date ?? new Date().toISOString().slice(0, 10);
   const symbols = body.symbols?.length ? body.symbols : ["AAPL"];
   const strat = body.strategy ?? {};
-  const type = strat.type === "rsi_30_70" ? "rsi_threshold" : (strat.type ?? "rsi_threshold");
+  const rsiTypes = ["rsi_30_70", "rsi_25_75", "rsi_20_80"];
+  const type = (strat.type && rsiTypes.includes(strat.type as string)) ? "rsi_threshold" : (strat.type ?? "rsi_threshold");
   const params: Record<string, number> = { period: 14, buy_below: 30, sell_above: 70 };
   if (strat.params && typeof strat.params === "object") {
     if (typeof (strat.params as Record<string, unknown>).period === "number") params.period = (strat.params as Record<string, number>).period;

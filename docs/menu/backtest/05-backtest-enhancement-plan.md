@@ -179,6 +179,8 @@ Response:
 
 **툴화**: 백테스트 로직은 `backtest/engine.ts`의 `runBacktest`로 공통화되어 있으며, `skills/index.ts`에서 `run_backtest` 스킬로 등록. 채팅에서 "지난 1년 AAPL RSI 30/70 백테스트해줘" 요청 시 ReAct가 이 스킬을 호출해 결과를 답변에 포함한다.
 
+**기획 변경 — MCP 연동**: 백테스트 Python 서비스는 **MCP 서버**로 도구(`get_history`, `run_backtest`)를 노출하고, **Skill이 도구를 호출할 때는 MCP 클라이언트로 호출**한다. Node는 MCP 클라이언트로 Python MCP 서버에 연결해 `run_backtest`(및 필요 시 `get_history`) 도구를 호출하고, 그 결과를 스킬 반환값으로 사용. 상세: [docs/mcp-backtest-integration.md](../../mcp-backtest-integration.md).
+
 ### 6.2 백테스트 탭과의 연동
 
 - 채팅에서 백테스트 실행 시 **run_id**를 응답에 포함시키거나, "상세 결과는 백테스트 탭에서 확인하세요" + 링크(또는 run_id 전달)로 탭에서 `runs/:id` 조회 가능하게 함.
