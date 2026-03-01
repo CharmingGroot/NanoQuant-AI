@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NanoQuant AI v2</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <style>
+      :root {
+        --nq-bg: #0d1117;
+        --nq-surface: #161b22;
+        --nq-surface-hover: #21262d;
+        --nq-surface-elevated: #1c2128;
+        --nq-border: #30363d;
+        --nq-border-subtle: #21262d;
+        --nq-text: #e6edf3;
+        --nq-text-muted: #8b949e;
+        --nq-title: #f0f6fc;
+        --nq-accent: #388bfd;
+        --nq-accent-hover: #58a6ff;
+        --nq-success: #3fb950;
+        --nq-danger: #f85149;
+        --nq-warning: #d29922;
+        --nq-purple: #a371f7;
+        --nq-chat-user-bg: rgba(56, 139, 253, 0.12);
+        --nq-chat-bot-bg: rgba(22, 27, 34, 0.8);
+        --nq-radius: 12px;
+        --nq-radius-sm: 8px;
+        --nq-radius-lg: 16px;
+        --nq-pill-radius: 20px;
+        --nq-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+        --nq-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.25);
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--nq-bg);
+        color: var(--nq-text);
+        font-family: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+        font-size: 15px;
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+      }
+      #app { min-height: 100vh; display: block; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

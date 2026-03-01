@@ -7,6 +7,27 @@
 secrets.json
 credentials*
 
+# === Node.js / TypeScript ===
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+.npm
+.pnpm-store
+.pnpm-debug.log*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+coverage/
+.nyc_output
+.vite/
+.turbo
+.eslintcache
+*.local
+out/
+.next/
+.vercel
+
 # === Python ===
 __pycache__/
 *.py[cod]
@@ -19,8 +40,6 @@ env/
 .env/
 *.egg-info/
 .eggs/
-dist/
-build/
 
 # === 프로젝트 런타임 (생성물·로그·DB) ===
 nanoquant*.db
@@ -33,6 +52,8 @@ nanoquant.log
 trade_history.json
 wrong_decisions.json
 watchlist.json
+agent_kg.db
+agent_sessions.json
 
 # === IDE / OS ===
 .idea/

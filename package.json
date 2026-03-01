@@ -1,0 +1,22 @@
+{
+  "name": "nanoquant-ai",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "pnpm -r run build",
+    "dev": "concurrently -n api,web \"pnpm --filter api run dev\" \"pnpm --filter web run dev\"",
+    "dev:api": "pnpm --filter api run dev",
+    "dev:web": "pnpm --filter web run dev",
+    "start": "node scripts/start.js",
+    "verify": "node scripts/verify-api.js",
+    "test": "pnpm -r run test"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "packageManager": "pnpm@10.0.0",
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}
